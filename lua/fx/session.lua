@@ -93,9 +93,14 @@ function M.ensure(cb)
 		return cb(M.state)
 	end
 	local cwd = vim.fn.getcwd()
+	local cmd = vim.deepcopy(config.fx_cmd)
+	for name, v in pairs(config.context_limits or {}) do
+		table.insert(cmd, 2, ("%s=%s"):format(name, v))
+		table.insert(cmd, 2, "--context-limit")
+	end
 	local c -- declared before spawn so the on_exit closure captures this local
 	c = client.spawn({
-		cmd = config.fx_cmd,
+		cmd = cmd,
 		cwd = cwd,
 		handlers = handlers(),
 		on_exit = function()
