@@ -102,6 +102,7 @@ function M.ensure(cb)
 	c = client.spawn({
 		cmd = cmd,
 		cwd = cwd,
+		env = config.permission and { FX_PERMISSION_MODE = config.permission } or nil,
 		handlers = handlers(),
 		on_exit = function()
 			if M.state and M.state.c == c then

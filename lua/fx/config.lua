@@ -2,7 +2,7 @@ local M = {
 	fx_cmd = { "fx", "acp" },
 	mode = "code",
 	model = "deepseek/deepseek-v4-flash",
-	permission = "yolo", -- not the true fx yolo, just this wrapper's auto-approve on tool request
+	permission = "yolo",
 	context_limits = { skill_catalog_bytes = 0 },
 	force_write_file = true, -- force write current file before sending to fx
 	output = { width = 64, max_height = 14 }, -- float sizing, used by ui.lua

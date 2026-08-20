@@ -10,7 +10,7 @@ local Client = {}
 Client.__index = Client
 
 --- Spawn the agent process and start reading its stdout.
----@param opts { cmd: string[], cwd: string, handlers: table<string, function>?, on_exit: fun()? }
+---@param opts { cmd: string[], cwd: string, env: table<string, string>?, handlers: table<string, function>?, on_exit: fun()? }
 ---@return fx.Client
 function M.spawn(opts)
 	local self = setmetatable({
@@ -23,6 +23,7 @@ function M.spawn(opts)
 
 	self.proc = vim.system(opts.cmd, {
 		cwd = opts.cwd,
+		env = opts.env,
 		stdin = true,
 		stdout = function(_, data)
 			if not data then
