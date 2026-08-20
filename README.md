@@ -19,7 +19,6 @@ Use [fx](https://github.com/vercel-labs/fx.git) in neovim:
 
 | Where | Key | Action |
 | --- | --- | --- |
-| normal / visual | `<leader>k` | open the prompt overlay (visual selection becomes context) |
 | prompt overlay | `<CR>` | submit |
 | prompt overlay | `q` / `<Esc>` | cancel |
 | transcript hover | `q` / `<Esc>` | close |
