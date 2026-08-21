@@ -192,8 +192,12 @@ function M._tick()
 	if not t or not t.spinner_timer or not t.spinner_mark or not api.nvim_buf_is_valid(t.ctx.buf) then
 		return
 	end
+	local at = api.nvim_buf_get_extmark_by_id(t.ctx.buf, ns, t.spinner_mark, {})[1]
+	if not at then
+		return
+	end
 	t.spinner_frame = t.spinner_frame % #spinner_frames + 1
-	pcall(api.nvim_buf_set_extmark, t.ctx.buf, ns, math.max(t.ctx.row - 1, 0), 0, {
+	api.nvim_buf_set_extmark(t.ctx.buf, ns, at, 0, {
 		id = t.spinner_mark,
 		virt_text = { { " " .. spinner_frames[t.spinner_frame] .. " fx", "FxSpinner" } },
 		virt_text_pos = "eol",
@@ -212,14 +216,20 @@ function M.show_last_turn(turn)
 	local ctx = turn.ctx
 	local width, height = float_width(), M._height(turn)
 	local cfg
-	if ctx and api.nvim_win_is_valid(ctx.win) and api.nvim_buf_is_valid(ctx.buf) then
-		local pos = vim.fn.screenpos(ctx.win, math.max(ctx.row, 1), 1)
-		cfg = vim.tbl_extend("force", flip_cfg(math.max(pos.row, 1), math.max(pos.col, 1), width, height), {
-			relative = "win",
-			win = ctx.win,
-			bufpos = { math.max(ctx.row - 1, 0), 0 },
-		})
-	else
+	-- the window may show another buffer by now, which ctx.row does not index
+	if ctx and api.nvim_win_is_valid(ctx.win) and api.nvim_win_get_buf(ctx.win) == ctx.buf then
+		-- clamp row
+		local row = math.min(math.max(ctx.row, 1), api.nvim_buf_line_count(ctx.buf))
+		local pos = vim.fn.screenpos(ctx.win, row, 1)
+		if pos.row > 0 then -- 0 means that line is scrolled out of view
+			cfg = vim.tbl_extend("force", flip_cfg(pos.row, math.max(pos.col, 1), width, height), {
+				relative = "win",
+				win = ctx.win,
+				bufpos = { row - 1, 0 },
+			})
+		end
+	end
+	if not cfg then
 		cfg = {
 			relative = "editor",
 			row = vim.o.lines - 3,

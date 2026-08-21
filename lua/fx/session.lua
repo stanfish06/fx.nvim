@@ -4,6 +4,7 @@ local config = require("fx.config")
 ---@class fx.SessionState
 ---@field c fx.Client
 ---@field session_id string
+---@field cwd string
 
 ---@class fx.Session
 ---@field state fx.SessionState?
@@ -89,10 +90,15 @@ end
 --- Ensure a live fx process + session, lazily spawning and initializing on first use.
 ---@param cb fun(st: fx.SessionState?)
 function M.ensure(cb)
-	if M.state and not M.state.c.dead and M.state.session_id then
-		return cb(M.state)
-	end
 	local cwd = vim.fn.getcwd()
+	if M.state and not M.state.c.dead and M.state.session_id then
+		if M.state.cwd == cwd then
+			return cb(M.state)
+		end
+		M.state.c:kill()
+		M.state = nil
+		vim.notify("fx: new session for " .. vim.fn.fnamemodify(cwd, ":~"), vim.log.levels.INFO)
+	end
 	local cmd = vim.deepcopy(config.fx_cmd)
 	for name, v in pairs(config.context_limits or {}) do
 		table.insert(cmd, 2, ("%s=%s"):format(name, v))
@@ -127,7 +133,7 @@ function M.ensure(cb)
 			if serr or not (res and res.sessionId) then
 				return fail(serr, "session/new")
 			end
-			M.state = { c = c, session_id = res.sessionId }
+			M.state = { c = c, session_id = res.sessionId, cwd = cwd }
 			apply_session_options(M.state)
 			cb(M.state)
 		end)
@@ -141,12 +147,13 @@ function M.prompt(blocks, ctx)
 	if M.running then
 		return vim.notify("fx: a turn is already running (:Fx stop to interrupt)", vim.log.levels.WARN)
 	end
+	M.running = true
 	M.ensure(function(st)
 		if not st then
+			M.running = false
 			return
 		end
 		local ui, reload = require("fx.ui"), require("fx.reload")
-		M.running = true
 		reload.snapshot()
 		ui.begin_turn(ctx)
 		st.c:request("session/prompt", { sessionId = st.session_id, prompt = blocks }, function(err, res)
@@ -161,6 +168,9 @@ end
 function M.stop()
 	if M.state and M.running then
 		M.state.c:notify("session/cancel", { sessionId = M.state.session_id })
+	elseif M.running then
+		M.running = false
+		vim.notify("fx: cancelled before the session started", vim.log.levels.INFO)
 	else
 		vim.notify("fx: nothing to stop", vim.log.levels.INFO)
 	end
