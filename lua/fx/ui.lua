@@ -17,6 +17,7 @@ local api = vim.api
 ---@class fx.Ui
 ---@field turn fx.Turn?
 ---@field turns fx.Turn[]
+---@field list_win integer?
 local M = { turn = nil, turns = {} }
 
 local ns = api.nvim_create_namespace("fx_ui")
@@ -256,7 +257,6 @@ function M.show_last_turn(turn)
 	vim.keymap.set("n", "<Esc>", M.close_output, { buffer = turn.buf })
 end
 
---- Close any open transcript float (turns and their buffers are kept).
 function M.close_output()
 	for _, t in ipairs(M.turns) do
 		if t.win and api.nvim_win_is_valid(t.win) then
@@ -264,6 +264,113 @@ function M.close_output()
 		end
 		t.win = nil
 	end
+	if M.list_win and api.nvim_win_is_valid(M.list_win) then
+		api.nvim_win_close(M.list_win, true)
+	end
+	M.list_win = nil
+end
+
+---@param iso string
+---@return integer?
+local function epoch(iso)
+	local y, mo, d, h, mi, s = iso:match("(%d+)-(%d+)-(%d+)T(%d+):(%d+):(%d+)")
+	if not y then
+		return nil
+	end
+	local fields = {
+		year = tonumber(y),
+		month = tonumber(mo),
+		day = tonumber(d),
+		hour = tonumber(h),
+		min = tonumber(mi),
+		sec = tonumber(s),
+		isdst = false,
+	}
+	local now = os.time()
+	-- os.time reads both field sets as local standard time, so the zone offset
+	-- measured from now cancels out of the parsed timestamp
+	return os.time(fields) + os.difftime(now, os.time(os.date("!*t", now) --[[@as osdateparam]]))
+end
+
+--- Time since an epoch timestamp, at the coarsest useful unit.
+---@param sec integer
+---@return string
+local function age(sec)
+	local d = os.time() - sec
+	if d < 60 then
+		return "just now"
+	elseif d < 3600 then
+		return ("%dm ago"):format(math.floor(d / 60))
+	elseif d < 86400 then
+		return ("%dh ago"):format(math.floor(d / 3600))
+	elseif d < 172800 then
+		return "yesterday"
+	elseif d < 604800 then
+		return ("%dd ago"):format(math.floor(d / 86400))
+	end
+	return os.date("%b %d", sec) --[[@as string]]
+end
+
+--- Show the workspace's fx sessions in a float, newest first, running one
+--- marked. session/list carries no turn count, so sessions whose timestamp
+--- never moved past their creation are tagged "unused".
+---@param sessions table[] {sessionId, cwd, updatedAt} from session/list
+---@param current string? sessionId of the running session
+function M.show_sessions(sessions, current)
+	local rows = {}
+	for _, s in ipairs(sessions) do
+		local at = type(s.updatedAt) == "string" and epoch(s.updatedAt) or nil
+		local created = tonumber(tostring(s.sessionId):match("^(%d+)"))
+		rows[#rows + 1] = {
+			id = s.sessionId,
+			at = at,
+			unused = at and created and at - math.floor(created / 1000) <= 1 or false,
+		}
+	end
+	if #rows == 0 then
+		return vim.notify("fx: no sessions for " .. vim.fn.fnamemodify(vim.fn.getcwd(), ":~"), vim.log.levels.INFO)
+	end
+	table.sort(rows, function(a, b)
+		return (a.at or 0) > (b.at or 0)
+	end)
+	local lines, current_row = {}, nil
+	for _, r in ipairs(rows) do
+		local live = current ~= nil and r.id == current
+		if live then
+			current_row = #lines
+		end
+		local line = ("%s %s  %-11s%s"):format(
+			live and "●" or " ",
+			r.at and os.date("%H:%M", r.at) or "--:--",
+			live and "running" or (r.at and age(r.at) or "unknown"),
+			r.unused and not live and "unused" or ""
+		)
+		lines[#lines + 1] = (line:gsub("%s+$", ""))
+	end
+	M.close_output()
+	local buf = api.nvim_create_buf(false, true)
+	vim.bo[buf].bufhidden = "wipe"
+	api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+	local width, height = float_width(), math.min(config.output.max_height, #lines)
+	M.list_win = api.nvim_open_win(
+		buf,
+		true,
+		vim.tbl_extend("force", cursor_float_cfg(width, height), {
+			width = width,
+			height = height,
+			style = "minimal",
+			border = config.border,
+			title = (" fx · sessions (%d) "):format(#lines),
+			title_pos = "left",
+		})
+	)
+	vim.wo[M.list_win].winhighlight = FLOAT_WINHL
+	if current_row then
+		api.nvim_buf_set_extmark(buf, ns, current_row, 0, { line_hl_group = "FxSpinner" })
+		api.nvim_win_set_cursor(M.list_win, { current_row + 1, 0 })
+	end
+	vim.keymap.set("n", "q", M.close_output, { buffer = buf })
+	vim.keymap.set("n", "<Esc>", M.close_output, { buffer = buf })
 end
 
 --- Pick a past prompt via vim.ui.select (newest first) and view its transcript.

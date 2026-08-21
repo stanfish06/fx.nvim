@@ -43,6 +43,7 @@ end
 --- > restart: restart the fx session
 --- > rewind: check the previous request and agent response
 --- > history: check the full session history
+--- > list: list the workspace's fx sessions, running one first
 --- > ask <text>: directly send input text to agent (ask alone opens the input box)
 --- > nil: open the input box to enter the prompt
 ---@param o table arguments
@@ -58,6 +59,8 @@ function M.main(o)
 		ui.show_last_turn()
 	elseif sub == "history" then
 		ui.show_full_history()
+	elseif sub == "list" then
+		session.list(ui.show_sessions)
 	elseif sub == "ask" or sub == nil then
 		local prompt = table.concat(vim.list_slice(o.fargs, 2), " ")
 		M.ask(o.range > 0 and { o.line1, o.line2 } or nil, prompt)

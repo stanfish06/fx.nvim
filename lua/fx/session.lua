@@ -87,6 +87,44 @@ local function apply_session_options(st)
 	end
 end
 
+--- Build the fx command line, applying configured context limits.
+---@return string[]
+local function fx_command()
+	local cmd = vim.deepcopy(config.fx_cmd)
+	for name, v in pairs(config.context_limits or {}) do
+		table.insert(cmd, 2, ("%s=%s"):format(name, v))
+		table.insert(cmd, 2, "--context-limit")
+	end
+	return cmd
+end
+
+--- Spawn fx.
+---@param on_exit fun(c: fx.Client)? process exit callback
+---@param cb fun(c: fx.Client?) nil when the handshake failed
+local function connect(on_exit, cb)
+	local c
+	c = client.spawn({
+		cmd = fx_command(),
+		cwd = vim.fn.getcwd(),
+		env = config.permission and { FX_PERMISSION_MODE = config.permission } or nil,
+		handlers = handlers(),
+		on_exit = on_exit and function()
+			on_exit(c)
+		end or nil,
+	})
+	c:request("initialize", {
+		protocolVersion = 1,
+		clientCapabilities = { fs = { readTextFile = false, writeTextFile = false }, terminal = false },
+	}, function(err)
+		if err then
+			vim.notify(("fx: initialize failed: %s"):format(err.message or "?"), vim.log.levels.ERROR)
+			c:kill()
+			return cb(nil)
+		end
+		cb(c)
+	end)
+end
+
 --- Ensure a live fx process + session, lazily spawning and initializing on first use.
 ---@param cb fun(st: fx.SessionState?)
 function M.ensure(cb)
@@ -99,44 +137,51 @@ function M.ensure(cb)
 		M.state = nil
 		vim.notify("fx: new session for " .. vim.fn.fnamemodify(cwd, ":~"), vim.log.levels.INFO)
 	end
-	local cmd = vim.deepcopy(config.fx_cmd)
-	for name, v in pairs(config.context_limits or {}) do
-		table.insert(cmd, 2, ("%s=%s"):format(name, v))
-		table.insert(cmd, 2, "--context-limit")
-	end
-	local c -- declared before spawn so the on_exit closure captures this local
-	c = client.spawn({
-		cmd = cmd,
-		cwd = cwd,
-		env = config.permission and { FX_PERMISSION_MODE = config.permission } or nil,
-		handlers = handlers(),
-		on_exit = function()
-			if M.state and M.state.c == c then
-				M.state, M.running = nil, false
-				vim.notify("fx: acp process exited", vim.log.levels.WARN)
-			end
-		end,
-	})
-	local function fail(err, stage)
-		vim.notify(("fx: %s failed: %s"):format(stage, err and err.message or "?"), vim.log.levels.ERROR)
-		c:kill()
-		cb(nil)
-	end
-	c:request("initialize", {
-		protocolVersion = 1,
-		clientCapabilities = { fs = { readTextFile = false, writeTextFile = false }, terminal = false },
-	}, function(ierr)
-		if ierr then
-			return fail(ierr, "initialize")
+	connect(function(c)
+		if M.state and M.state.c == c then
+			M.state, M.running = nil, false
+			vim.notify("fx: acp process exited", vim.log.levels.WARN)
+		end
+	end, function(c)
+		if not c then
+			return cb(nil)
 		end
 		c:request("session/new", { cwd = cwd, mcpServers = {} }, function(serr, res)
 			if serr or not (res and res.sessionId) then
-				return fail(serr, "session/new")
+				vim.notify(("fx: session/new failed: %s"):format(serr and serr.message or "?"), vim.log.levels.ERROR)
+				c:kill()
+				return cb(nil)
 			end
 			M.state = { c = c, session_id = res.sessionId, cwd = cwd }
 			apply_session_options(M.state)
 			cb(M.state)
 		end)
+	end)
+end
+
+--- Saved sessions of the current workspace.
+---@param cb fun(sessions: table[], current: string?) current is the running sessionId
+function M.list(cb)
+	local function ask(c, current, after)
+		c:request("session/list", {}, function(err, res)
+			if after then
+				after()
+			end
+			if err then
+				return vim.notify(("fx: session/list failed: %s"):format(err.message or "?"), vim.log.levels.ERROR)
+			end
+			cb(res and res.sessions or {}, current)
+		end)
+	end
+	if M.state and not M.state.c.dead and M.state.cwd == vim.fn.getcwd() then
+		return ask(M.state.c, M.state.session_id)
+	end
+	connect(nil, function(c)
+		if c then
+			ask(c, nil, function()
+				c:kill()
+			end)
+		end
 	end)
 end
 

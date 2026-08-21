@@ -9,6 +9,6 @@ end, {
 	range = true,
 	nargs = "*",
 	complete = function()
-		return { "ask", "stop", "restart", "rewind", "history" }
+		return { "ask", "list", "stop", "restart", "rewind", "history" }
 	end,
 })
