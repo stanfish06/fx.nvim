@@ -406,7 +406,7 @@ function M.show_full_history()
 		items[#items + 1] = M.turns[i]
 	end
 	vim.ui.select(items, {
-		prompt = "fx history",
+		prompt = "fx history: ",
 		format_item = function(t)
 			return ("%s  %s  %s"):format(os.date("%H:%M", t.at), t.ctx.label, t.request:gsub("%s+", " "))
 		end,
