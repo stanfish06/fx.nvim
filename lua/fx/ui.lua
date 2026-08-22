@@ -157,7 +157,7 @@ function M.pick_model()
 			return
 		end
 		vim.ui.select(st.models or {}, {
-			prompt = "fx model",
+			prompt = "fx model: ",
 			format_item = function(id)
 				return (id == st.model and "● " or "  ") .. id
 			end,
