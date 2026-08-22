@@ -5,6 +5,8 @@ local config = require("fx.config")
 ---@field c fx.Client
 ---@field session_id string
 ---@field cwd string
+---@field model string?
+---@field models string[]?
 
 ---@class fx.Session
 ---@field state fx.SessionState?
@@ -73,17 +75,49 @@ function M._on_permission(params, respond)
 	end)
 end
 
---- Push configured mode/model onto a fresh session (fx defaults otherwise).
+--- Fetch available models in fx
+---@param st fx.SessionState
+---@param res table?
+local function fetch_model(st, res)
+	for _, opt in ipairs(res and res.configOptions or {}) do
+		if opt.id == "model" then
+			st.model = opt.currentValue
+			st.models = vim.tbl_map(function(o)
+				return o.value
+			end, opt.options or {})
+		end
+	end
+end
+
+---@return string
+function M.current_model()
+	return M.state and M.state.model or config.default_model or "?"
+end
+
+---@param st fx.SessionState
+---@param id string
+function M.set_model(st, id)
+	st.c:request(
+		"session/set_config_option",
+		{ sessionId = st.session_id, configId = "model", value = id },
+		function(err, res)
+			if err then
+				return vim.notify(("fx: model %s rejected: %s"):format(id, err.message or "?"), vim.log.levels.WARN)
+			end
+			fetch_model(st, res)
+			config.default_model = st.model -- carry the choice into future sessions
+			vim.notify("fx: model → " .. st.model)
+		end
+	)
+end
+
 ---@param st fx.SessionState
 local function apply_session_options(st)
 	if config.mode then
 		st.c:request("session/set_mode", { sessionId = st.session_id, modeId = config.mode })
 	end
-	if config.model then
-		st.c:request(
-			"session/set_config_option",
-			{ sessionId = st.session_id, configId = "model", value = config.model }
-		)
+	if config.default_model and config.default_model ~= st.model then
+		M.set_model(st, config.default_model)
 	end
 end
 
@@ -153,6 +187,7 @@ function M.ensure(cb)
 				return cb(nil)
 			end
 			M.state = { c = c, session_id = res.sessionId, cwd = cwd }
+			fetch_model(M.state, res)
 			apply_session_options(M.state)
 			cb(M.state)
 		end)

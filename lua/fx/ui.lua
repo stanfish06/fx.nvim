@@ -105,6 +105,7 @@ local function cursor_float_cfg(width, height)
 end
 
 --- Open a small editable float under the cursor to type a request.
+--- TODO: make input box title customizable
 ---@param ctx fx.Context
 ---@param cb fun(text: string)
 function M.input(ctx, cb)
@@ -118,7 +119,7 @@ function M.input(ctx, cb)
 			height = 2,
 			style = "minimal",
 			border = config.border,
-			title = (" fx · %s "):format(ctx.label),
+			title = (" fx · %s · %s "):format(ctx.label, (require("fx.session").current_model():gsub("^.*/", ""))),
 			title_pos = "left",
 		})
 	)
@@ -144,6 +145,28 @@ function M.input(ctx, cb)
 	vim.keymap.set("n", "<Esc>", close, { buffer = buf })
 	vim.keymap.set("n", "q", close, { buffer = buf })
 	vim.cmd.startinsert()
+end
+
+function M.pick_model()
+	local session = require("fx.session")
+	if session.running then
+		return vim.notify("fx: turn in progress — :Fx stop first", vim.log.levels.WARN)
+	end
+	session.ensure(function(st)
+		if not st then
+			return
+		end
+		vim.ui.select(st.models or {}, {
+			prompt = "fx model",
+			format_item = function(id)
+				return (id == st.model and "● " or "  ") .. id
+			end,
+		}, function(choice)
+			if choice then
+				session.set_model(st, choice)
+			end
+		end)
+	end)
 end
 
 --- Start a turn

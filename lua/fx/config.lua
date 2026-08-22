@@ -1,7 +1,7 @@
 local M = {
 	fx_cmd = { "fx", "acp" },
 	mode = "code",
-	model = "deepseek/deepseek-v4-flash",
+	default_model = "deepseek/deepseek-v4-flash",
 	permission = "yolo",
 	context_limits = { skill_catalog_bytes = 0 },
 	force_write_file = true, -- force write current file before sending to fx
