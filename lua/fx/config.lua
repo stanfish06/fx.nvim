@@ -8,6 +8,36 @@ local M = {
 	output = { width = 64, max_height = 14 }, -- float sizing, used by ui.lua
 	spinner = "zap", -- snake|trig|dots|orbit|line|pulse|corners|arrows|bar|bounce|moon|zap|ping
 	border = "single", -- float border: single|rounded|double|solid|shadow|none
+    agent_context = {
+        cursor = {
+            row_text = true,
+            row_position = true,
+            col_position = true,
+            word = true,
+            treesitter_node = {
+                type = true,
+                range = true,
+                text = false,
+                parent = true,
+                scope = true,
+                inject = true,
+            }
+        },
+        visual_selection = {
+            text = true,
+            row_range = true,
+            col_range = true,
+            treesitter_nodes = {
+                covering = true, -- smallest named node that spans the selection
+                type = true,
+                range = true,
+                text = false,
+                parent = true,
+                scope = true,
+                inject = true,
+            }
+        }
+    },
 }
 
 --- Merge user options
