@@ -21,7 +21,14 @@ function M.ask(visual_range, prompt)
 	prompt = prompt and vim.trim(prompt)
 	local config = require("fx.config")
 	if config.force_write_file and vim.api.nvim_buf_get_name(0) ~= "" and vim.bo.modified then
-		vim.cmd("silent! write!")
+		-- ctx quotes buffer text/lines; send only if they made it to disk.
+		-- update (not write!) fails on 'readonly' or a file changed on disk
+		local ok, err = pcall(vim.cmd, "silent update")
+		if not ok or vim.bo.modified then
+			local reason = ok and "write declined; buffer and file differ"
+				or (err:match("Vim%([^)]*%):(.+)") or err)
+			return vim.notify("fx: not sent - " .. reason, vim.log.levels.ERROR)
+		end
 		if visual_range then
 			-- It is possible that visual block gets shifted after file write
 			-- update the visual range by visual marks
@@ -68,7 +75,7 @@ function M.main(o)
 		local prompt = table.concat(vim.list_slice(o.fargs, 2), " ")
 		M.ask(o.range > 0 and { o.line1, o.line2 } or nil, prompt)
 	else
-		vim.notify(("fx: unknown subcommand %q — use :Fx ask <text>"):format(sub), vim.log.levels.WARN)
+		vim.notify(("fx: unknown subcommand %q - use :Fx ask <text>"):format(sub), vim.log.levels.WARN)
 	end
 end
 

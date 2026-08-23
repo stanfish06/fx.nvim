@@ -21,40 +21,8 @@ local api = vim.api
 local M = { turn = nil, turns = {} }
 
 local ns = api.nvim_create_namespace("fx_ui")
-local spinner_patterns = {
-	snake = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" },
-	trig = { "▴", "▸", "▾", "◂" },
-	dots = { "⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷" },
-	orbit = { "⠁", "⠂", "⠄", "⡀", "⢀", "⠠", "⠐", "⠈" },
-	line = { "|", "/", "-", "\\" },
-	pulse = { "◐", "◓", "◑", "◒" },
-	corners = { "◰", "◳", "◲", "◱" },
-	arrows = { "←", "↖", "↑", "↗", "→", "↘", "↓", "↙" },
-	bar = { "▁", "▃", "▄", "▅", "▆", "▇", "█", "▇", "▆", "▅", "▄", "▃" },
-	bounce = {
-		"⠂",
-		"⠄",
-		"⠆",
-		"⠇",
-		"⠋",
-		"⠙",
-		"⠸",
-		"⠰",
-		"⠠",
-		"⠰",
-		"⠸",
-		"⠙",
-		"⠋",
-		"⠇",
-		"⠆",
-		"⠄",
-	},
-	moon = { "🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘" },
-	zap = { "»  ", "»» ", "»»»", " »»", "  »", "  «", " ««", "«««", "«« ", "«  ", interval = 70 },
-	ping = { "●∙∙", "∙●∙", "∙∙●", "∙●∙", interval = 80 },
-}
-local spinner_frames = spinner_patterns[config.spinner] or spinner_patterns.snake
-local spinner_interval = spinner_frames.interval or 120
+local spinner_frames = config.spinner.frames
+local spinner_interval = config.spinner.interval or 120
 
 local glyph = { pending = "·", in_progress = "…", completed = "✓", failed = "✗" }
 local HISTORY_MAX = 50
@@ -150,7 +118,7 @@ end
 function M.pick_model()
 	local session = require("fx.session")
 	if session.running then
-		return vim.notify("fx: turn in progress — :Fx stop first", vim.log.levels.WARN)
+		return vim.notify("fx: turn in progress - :Fx stop first", vim.log.levels.WARN)
 	end
 	session.ensure(function(st)
 		if not st then
@@ -519,7 +487,7 @@ function M.end_turn(err_msg, stop_reason)
 			-1,
 			-1,
 			false,
-			{ "", err_msg and ("✗ " .. err_msg) or ("— " .. (stop_reason or "done")) }
+			{ "", err_msg and ("✗ " .. err_msg) or ("- " .. (stop_reason or "done")) }
 		)
 		M._refresh()
 	end

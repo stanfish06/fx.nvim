@@ -13,6 +13,22 @@ local config = require("fx.config")
 ---@field running boolean
 local M = { state = nil, running = false }
 
+--- Debounced :checktime after fx touches files. Core does the rest:
+--- 'autoread' reloads unmodified buffers, conflicts get the W12 prompt,
+--- and FileChangedShell remains the user's customization point.
+local checktime_pending = false
+local function schedule_checktime()
+	if checktime_pending then
+		return
+	end
+	checktime_pending = true
+	vim.defer_fn(function()
+		checktime_pending = false
+		-- silent!: checktime is disallowed in the cmdline-window
+		vim.cmd("silent! checktime")
+	end, 200)
+end
+
 --- Handlers of agent responses
 ---@return table<string, function>
 local function handlers()
@@ -41,7 +57,7 @@ function M._on_update(u)
 		ui.tool_status(u.toolCallId, u.status)
 		if u.status == "completed" or u.status == "failed" then
 			-- fx may have edited files on disk; sync buffers
-			require("fx.reload").schedule_sweep()
+			schedule_checktime()
 		end
 	end
 end
@@ -56,7 +72,7 @@ function M._on_permission(params, respond)
 	if config.permission == "yolo" then
 		for _, o in ipairs(params.options or {}) do
 			if o.optionId == "allow_once" or o.kind == "allow_once" then
-				vim.notify("fx: auto-allowed — " .. title, vim.log.levels.INFO)
+				vim.notify("fx: auto-allowed - " .. title, vim.log.levels.INFO)
 				return respond({ outcome = { outcome = "selected", optionId = o.optionId } })
 			end
 		end
@@ -136,9 +152,15 @@ end
 ---@param on_exit fun(c: fx.Client)? process exit callback
 ---@param cb fun(c: fx.Client?) nil when the handshake failed
 local function connect(on_exit, cb)
+	local cmd = fx_command()
+	-- vim.system throws on a missing executable; fail with a hint instead
+	if vim.fn.executable(cmd[1]) ~= 1 then
+		vim.notify(("fx: %q is not executable (see :checkhealth fx)"):format(cmd[1]), vim.log.levels.ERROR)
+		return cb(nil)
+	end
 	local c
 	c = client.spawn({
-		cmd = fx_command(),
+		cmd = cmd,
 		cwd = vim.fn.getcwd(),
 		env = config.permission and { FX_PERMISSION_MODE = config.permission } or nil,
 		handlers = handlers(),
@@ -233,12 +255,11 @@ function M.prompt(blocks, ctx)
 			M.running = false
 			return
 		end
-		local ui, reload = require("fx.ui"), require("fx.reload")
-		reload.snapshot()
+		local ui = require("fx.ui")
 		ui.begin_turn(ctx)
 		st.c:request("session/prompt", { sessionId = st.session_id, prompt = blocks }, function(err, res)
 			M.running = false
-			reload.sweep()
+			vim.cmd("silent! checktime")
 			ui.end_turn(err and (err.message or "error") or nil, res and res.stopReason)
 		end)
 	end)
