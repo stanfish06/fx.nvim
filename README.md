@@ -4,6 +4,49 @@ Use [fx](https://github.com/vercel-labs/fx.git) in neovim:
 
 ![fx.nvim](assets/screenshot.svg)
 
+## Installation
+
+Requires the [fx](https://github.com/vercel-labs/fx.git) CLI on your `$PATH`.
+
+With [lazy.nvim](https://github.com/folke/lazy.nvim):
+
+```lua
+{
+  "stanfish06/fx.nvim",
+  cmd = "Fx",
+  opts = {},
+}
+```
+
+With built-in `vim.pack` (Neovim 0.12+):
+
+```lua
+vim.pack.add({ "https://github.com/stanfish06/fx.nvim" })
+```
+
+## Configuration
+
+lazy.nvim:
+
+```lua
+{
+  "stanfish06/fx.nvim",
+  cmd = "Fx",
+  opts = {
+    border = "rounded",
+    output = { width = 80 },
+  },
+}
+```
+
+Standard:
+
+```lua
+require("fx").setup({ border = "rounded" })
+```
+
+Defaults (see [config.lua](./lua/fx/config.lua))
+
 ## Commands
 
 | Command | Action |

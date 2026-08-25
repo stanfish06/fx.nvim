@@ -20,14 +20,18 @@ end
 function M.ask(visual_range, prompt)
 	prompt = prompt and vim.trim(prompt)
 	local config = require("fx.config")
-	if config.force_write_file and vim.api.nvim_buf_get_name(0) ~= "" and vim.bo.modified then
-		-- ctx quotes buffer text/lines; send only if they made it to disk.
-		-- update (not write!) fails on 'readonly' or a file changed on disk
+	if config.update_file_before_prompt and vim.api.nvim_buf_get_name(0) ~= "" and vim.bo.modified then
 		local ok, err = pcall(vim.cmd, "silent update")
 		if not ok or vim.bo.modified then
-			local reason = ok and "write declined; buffer and file differ"
-				or (err:match("Vim%([^)]*%):(.+)") or err)
-			return vim.notify("fx: not sent - " .. reason, vim.log.levels.ERROR)
+			local reason = ok and "write declined; buffer and file differ" or (err:match("Vim%([^)]*%):(.+)") or err)
+			if config.send_prompt_despite_update_failed then
+				vim.notify("fx: buffer/file out of sync -- " .. reason .. "; prompt sent anyway", vim.log.levels.WARN)
+			else
+				return vim.notify(
+					"fx: buffer/file out of sync -- " .. reason .. "; prompt not sent",
+					vim.log.levels.ERROR
+				)
+			end
 		end
 		if visual_range then
 			-- It is possible that visual block gets shifted after file write
