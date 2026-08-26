@@ -3,8 +3,10 @@ local config = require("fx.config")
 local api = vim.api
 
 ---@class fx.Turn
----@field ctx fx.Context
+---@field ctx fx.Context? absent on a transcript restored by :Fx restart
+---@field session_id string
 ---@field buf integer
+---@field replayed boolean?
 ---@field request string
 ---@field at integer start time
 ---@field tools table<string, {line: integer, title: string}> tool call id -> transcript line
@@ -16,8 +18,8 @@ local api = vim.api
 ---@field win integer?
 
 ---@class fx.Ui
----@field turn fx.Turn?
----@field turns fx.Turn[]
+---@field turn fx.Turn? turn in flight, whichever session it belongs to
+---@field turns table<string, fx.Turn[]> sessionId -> transcripts, oldest first
 ---@field list_win integer?
 local M = { turn = nil, turns = {} }
 
@@ -26,7 +28,6 @@ local spinner_frames = config.spinner.frames
 local spinner_interval = config.spinner.interval or 120
 
 local glyph = { pending = "·", in_progress = "…", completed = "✓", failed = "✗" }
-local HISTORY_MAX = 50
 
 local function set_hl()
 	api.nvim_set_hl(0, "FxSpinner", { link = "DiagnosticVirtualTextInfo", default = true })
@@ -138,16 +139,48 @@ function M.pick_model()
 	end)
 end
 
---- Start a turn
----@param ctx fx.Context
-function M.begin_turn(ctx)
-	M.close_output()
+---@return integer
+local function transcript_buf()
 	local buf = api.nvim_create_buf(false, true)
 	vim.bo[buf].bufhidden = "hide"
 	vim.bo[buf].filetype = "markdown"
+	return buf
+end
+
+--- Make a turn current, dropping its session's oldest turns past config.history_max.
+---@param turn fx.Turn
+local function push_turn(turn)
+	local max = config.history_max
+	max = (type(max) == "number" and max >= 1) and max or math.huge
+	local list = M.turns[turn.session_id] or {}
+	M.turns[turn.session_id] = list
+	M.turn = turn
+	list[#list + 1] = turn
+	if #list > max then
+		local old = table.remove(list, 1)
+		if old.buf and api.nvim_buf_is_valid(old.buf) then
+			pcall(api.nvim_buf_delete, old.buf, { force = true })
+		end
+	end
+end
+
+--- Id of the running session; turns from other sessions stay out of the way.
+---@return string?
+local function current_session()
+	local st = require("fx.session").state
+	return st and st.session_id
+end
+
+--- Start a turn
+---@param ctx fx.Context
+---@param session_id string
+function M.begin_turn(ctx, session_id)
+	M.close_output()
+	local buf = transcript_buf()
 	api.nvim_buf_set_lines(buf, 0, -1, false, { "❯ " .. ctx.request:gsub("\n", " "), "" })
 	local turn = {
 		ctx = ctx,
+		session_id = session_id,
 		buf = buf,
 		request = ctx.request,
 		at = os.time(),
@@ -156,14 +189,7 @@ function M.begin_turn(ctx)
 		nl_run = 1,
 		spinner_frame = 1,
 	}
-	M.turn = turn
-	M.turns[#M.turns + 1] = turn
-	if #M.turns > HISTORY_MAX then
-		local old = table.remove(M.turns, 1)
-		if old.buf and api.nvim_buf_is_valid(old.buf) then
-			pcall(api.nvim_buf_delete, old.buf, { force = true })
-		end
-	end
+	push_turn(turn)
 	if api.nvim_buf_is_valid(ctx.buf) then
 		turn.spinner_mark = api.nvim_buf_set_extmark(ctx.buf, ns, math.max(ctx.row - 1, 0), 0, {
 			virt_text = { { " " .. spinner_frames[1] .. " fx", "FxSpinner" } },
@@ -198,11 +224,65 @@ function M._tick()
 	})
 end
 
+--- Open a transcript for a session that session/load is about to replay.
+---@param session_id string
+---@return fx.Turn
+function M.begin_replay(session_id)
+	M.close_output()
+	return {
+		session_id = session_id,
+		buf = transcript_buf(),
+		request = "restored session",
+		at = os.time(),
+		tools = {},
+		last_was_tool = false,
+		nl_run = 1,
+		spinner_frame = 1,
+	}
+end
+
+--- Discard a replay transcript that never received a message.
+---@param turn fx.Turn
+function M.end_replay(turn)
+	if not turn.replayed and api.nvim_buf_is_valid(turn.buf) then
+		pcall(api.nvim_buf_delete, turn.buf, { force = true })
+	end
+end
+
+--- Append one replayed message.
+---@param turn fx.Turn
+---@param u table session/update payload
+function M.replay_chunk(turn, u)
+	local text = u.content and u.content.text
+	if not text or not api.nvim_buf_is_valid(turn.buf) then
+		return
+	end
+	local lines =
+		vim.split(u.sessionUpdate == "user_message_chunk" and ("❯ " .. text) or text, "\n", { plain = true })
+	if turn.replayed then
+		table.insert(lines, 1, "") -- blank line between messages
+		api.nvim_buf_set_lines(turn.buf, -1, -1, false, lines)
+	else
+		-- joins the history
+		turn.replayed = true
+		push_turn(turn)
+		api.nvim_buf_set_lines(turn.buf, 0, -1, false, lines)
+	end
+end
+
+--- Newest turn of the running session, else the newest anywhere.
+---@return fx.Turn?
+local function latest()
+	local list = M.turns[current_session()]
+	-- no live session, or none of its own yet: the last turn anywhere still shows
+	return (list and list[#list]) or M.turn
+end
+
 --- Show a turn's transcript in an unfocused float, anchored near where the
 --- request was made (editor corner if that window is gone). q/<Esc> closes.
----@param turn fx.Turn? defaults to the latest turn
+---@param turn fx.Turn? defaults to the running session's newest turn
 function M.show_last_turn(turn)
-	turn = turn or M.turn
+	turn = turn or latest()
 	if not turn or not api.nvim_buf_is_valid(turn.buf) then
 		return vim.notify("fx: no output to show", vim.log.levels.INFO)
 	end
@@ -251,11 +331,13 @@ function M.show_last_turn(turn)
 end
 
 function M.close_output()
-	for _, t in ipairs(M.turns) do
-		if t.win and api.nvim_win_is_valid(t.win) then
-			api.nvim_win_close(t.win, true)
+	for _, list in pairs(M.turns) do
+		for _, t in ipairs(list) do
+			if t.win and api.nvim_win_is_valid(t.win) then
+				api.nvim_win_close(t.win, true)
+			end
+			t.win = nil
 		end
-		t.win = nil
 	end
 	if M.list_win and api.nvim_win_is_valid(M.list_win) then
 		api.nvim_win_close(M.list_win, true)
@@ -304,12 +386,12 @@ local function age(sec)
 	return os.date("%b %d", sec) --[[@as string]]
 end
 
---- Show the workspace's fx sessions in a float, newest first, running one
---- marked. session/list carries no turn count, so sessions whose timestamp
---- never moved past their creation are tagged "unused".
+--- session/list entries as {id, at, unused} rows, newest first. The list
+--- carries no turn count, so a timestamp that never moved past its creation
+--- reads as unused.
 ---@param sessions table[] {sessionId, cwd, updatedAt} from session/list
----@param current string? sessionId of the running session
-function M.show_sessions(sessions, current)
+---@return table[]
+local function session_rows(sessions)
 	local rows = {}
 	for _, s in ipairs(sessions) do
 		local at = type(s.updatedAt) == "string" and epoch(s.updatedAt) or nil
@@ -320,12 +402,22 @@ function M.show_sessions(sessions, current)
 			unused = at and created and at - math.floor(created / 1000) <= 1 or false,
 		}
 	end
-	if #rows == 0 then
-		return vim.notify("fx: no sessions for " .. vim.fn.fnamemodify(vim.fn.getcwd(), ":~"), vim.log.levels.INFO)
-	end
 	table.sort(rows, function(a, b)
 		return (a.at or 0) > (b.at or 0)
 	end)
+	return rows
+end
+
+--- Show the workspace's fx sessions in a float, newest first, running one marked.
+---@param sessions table[] {sessionId, cwd, updatedAt} from session/list
+---@param current string? sessionId of the running session
+function M.show_sessions(sessions, current)
+	local rows = session_rows(sessions)
+	if #rows == 0 then
+		local st = require("fx.session").state
+		local root = vim.fn.fnamemodify(st and st.cwd or vim.fn.getcwd(), ":~")
+		return vim.notify("fx: no sessions for " .. root, vim.log.levels.INFO)
+	end
 	local lines, current_row = {}, nil
 	for _, r in ipairs(rows) do
 		local live = current ~= nil and r.id == current
@@ -366,19 +458,54 @@ function M.show_sessions(sessions, current)
 	vim.keymap.set("n", "<Esc>", M.close_output, { buffer = buf })
 end
 
---- Pick a past prompt via vim.ui.select (newest first) and view its transcript.
+--- Pick a saved session and resume it.
+function M.pick_session()
+	local session = require("fx.session")
+	session.list(function(sessions, current)
+		local items = vim.tbl_filter(function(r)
+			return r.id ~= current
+		end, session_rows(sessions))
+		if #items == 0 then
+			return vim.notify("fx: no other session to resume", vim.log.levels.INFO)
+		end
+		vim.ui.select(items, {
+			prompt = "fx resume: ",
+			format_item = function(r)
+				if not r.at then
+					return r.id
+				end
+				return ("%s  %s%s"):format(os.date("%H:%M", r.at), age(r.at), r.unused and "  unused" or "")
+			end,
+		}, function(choice)
+			if choice then
+				session.resume(choice.id)
+			end
+		end)
+	end)
+end
+
+--- Pick a past prompt of the running session (newest first) and view its transcript.
 function M.show_full_history()
-	if #M.turns == 0 then
+	local list = M.turns[current_session()]
+	if not (list and #list > 0) then
+		-- fall back to the session the last turn belongs to
+		list = M.turn and M.turns[M.turn.session_id]
+	end
+	if not (list and #list > 0) then
 		return vim.notify("fx: no history", vim.log.levels.INFO)
 	end
 	local items = {}
-	for i = #M.turns, 1, -1 do
-		items[#items + 1] = M.turns[i]
+	for i = #list, 1, -1 do
+		items[#items + 1] = list[i]
 	end
 	vim.ui.select(items, {
 		prompt = "fx history: ",
 		format_item = function(t)
-			return ("%s  %s  %s"):format(os.date("%H:%M", t.at), t.ctx.label, t.request:gsub("%s+", " "))
+			return ("%s  %s  %s"):format(
+				os.date("%H:%M", t.at),
+				t.ctx and t.ctx.label or "-",
+				t.request:gsub("%s+", " ")
+			)
 		end,
 	}, function(choice)
 		if choice then

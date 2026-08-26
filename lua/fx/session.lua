@@ -10,8 +10,33 @@ local config = require("fx.config")
 
 ---@class fx.Session
 ---@field state fx.SessionState?
+---@field last {id: string, cwd: string}? session :Fx restart reloads
 ---@field running boolean
-local M = { state = nil, running = false }
+local M = { state = nil, last = nil, running = false }
+
+--- Set while a session switch is in flight; a second switch or a prompt landing
+--- in that window would talk to the session being replaced.
+local switching = false
+
+---@type table<string, {c: fx.Client, turn: fx.Turn}> sessionId -> in-flight session/load replay
+local replay = {}
+
+--- Drop the session and any pending replay when the process behind them dies.
+---@param c fx.Client
+local function process_exit(c)
+	for id, r in pairs(replay) do
+		if r.c == c then
+			replay[id] = nil
+		end
+	end
+	-- a switch riding a dead process never answers; leaving the flag set would
+	-- refuse every later command
+	switching = false
+	if M.state and M.state.c == c then
+		M.state, M.running = nil, false
+		vim.notify("fx: acp process exited", vim.log.levels.WARN)
+	end
+end
 
 --- Debounced :checktime after fx touches files. Core does the rest:
 --- 'autoread' reloads unmodified buffers, conflicts get the W12 prompt,
@@ -34,7 +59,14 @@ end
 local function handlers()
 	return {
 		["session/update"] = function(params)
-			if M.state and params and params.sessionId == M.state.session_id then
+			if not params then
+				return
+			end
+			local into = replay[params.sessionId]
+			if into then
+				return require("fx.ui").replay_chunk(into.turn, params.update or {})
+			end
+			if M.state and params.sessionId == M.state.session_id then
 				M._on_update(params.update or {})
 			end
 		end,
@@ -127,11 +159,23 @@ function M.set_model(st, id)
 	)
 end
 
+--- Make st the live session, remembering it for :Fx restart.
 ---@param st fx.SessionState
-local function apply_session_options(st)
+local function adopt(st)
+	M.state = st
+	M.last = { id = st.session_id, cwd = st.cwd }
+end
+
+---@param st fx.SessionState
+local function apply_mode(st)
 	if config.mode then
 		st.c:request("session/set_mode", { sessionId = st.session_id, modeId = config.mode })
 	end
+end
+
+---@param st fx.SessionState
+local function apply_session_options(st)
+	apply_mode(st)
 	if config.default_model and config.default_model ~= st.model then
 		M.set_model(st, config.default_model)
 	end
@@ -148,10 +192,10 @@ local function fx_command()
 	return cmd
 end
 
---- Spawn fx.
----@param on_exit fun(c: fx.Client)? process exit callback
+--- Spawn fx rooted at cwd
+---@param cwd string
 ---@param cb fun(c: fx.Client?) nil when the handshake failed
-local function connect(on_exit, cb)
+local function connect(cwd, cb)
 	local cmd = fx_command()
 	-- vim.system throws on a missing executable; fail with a hint instead
 	if vim.fn.executable(cmd[1]) ~= 1 then
@@ -161,12 +205,12 @@ local function connect(on_exit, cb)
 	local c
 	c = client.spawn({
 		cmd = cmd,
-		cwd = vim.fn.getcwd(),
+		cwd = cwd,
 		env = config.permission and { FX_PERMISSION_MODE = config.permission } or nil,
 		handlers = handlers(),
-		on_exit = on_exit and function()
-			on_exit(c)
-		end or nil,
+		on_exit = function()
+			process_exit(c)
+		end,
 	})
 	c:request("initialize", {
 		protocolVersion = 1,
@@ -181,34 +225,21 @@ local function connect(on_exit, cb)
 	end)
 end
 
---- Ensure a live fx process + session, lazily spawning and initializing on first use.
+--- Spawn a process rooted at cwd and open a fresh session in it.
+---@param cwd string
 ---@param cb fun(st: fx.SessionState?)
-function M.ensure(cb)
-	local cwd = vim.fn.getcwd()
-	if M.state and not M.state.c.dead and M.state.session_id then
-		if M.state.cwd == cwd then
-			return cb(M.state)
-		end
-		M.state.c:kill()
-		M.state = nil
-		vim.notify("fx: new session for " .. vim.fn.fnamemodify(cwd, ":~"), vim.log.levels.INFO)
-	end
-	connect(function(c)
-		if M.state and M.state.c == c then
-			M.state, M.running = nil, false
-			vim.notify("fx: acp process exited", vim.log.levels.WARN)
-		end
-	end, function(c)
+local function start(cwd, cb)
+	connect(cwd, function(c)
 		if not c then
 			return cb(nil)
 		end
-		c:request("session/new", { cwd = cwd, mcpServers = {} }, function(serr, res)
-			if serr or not (res and res.sessionId) then
-				vim.notify(("fx: session/new failed: %s"):format(serr and serr.message or "?"), vim.log.levels.ERROR)
+		c:request("session/new", { cwd = cwd, mcpServers = {} }, function(err, res)
+			if err or not (res and res.sessionId) then
+				vim.notify(("fx: session/new failed: %s"):format(err and err.message or "?"), vim.log.levels.ERROR)
 				c:kill()
 				return cb(nil)
 			end
-			M.state = { c = c, session_id = res.sessionId, cwd = cwd }
+			adopt({ c = c, session_id = res.sessionId, cwd = cwd })
 			fetch_model(M.state, res)
 			apply_session_options(M.state)
 			cb(M.state)
@@ -216,7 +247,107 @@ function M.ensure(cb)
 	end)
 end
 
---- Saved sessions of the current workspace.
+--- Ensure a live fx process + session, lazily spawning on first use.
+---@param cb fun(st: fx.SessionState?)
+function M.ensure(cb)
+	if M.state and not M.state.c.dead and M.state.session_id then
+		return cb(M.state)
+	end
+	start(vim.fn.getcwd(), cb)
+end
+
+---@return boolean
+local function busy()
+	if M.running then
+		vim.notify("fx is running (:Fx stop to interrupt)", vim.log.levels.WARN)
+		return true
+	end
+	if switching then
+		vim.notify("fx is switching session", vim.log.levels.WARN)
+		return true
+	end
+	return false
+end
+
+--- Open a fresh session, carrying nothing over. Respawns when the cwd moved,
+--- since fx pins a session to the process it was created in.
+function M.new()
+	if busy() then
+		return
+	end
+	switching = true
+	local cwd = vim.fn.getcwd()
+	if not M.state or M.state.c.dead or M.state.cwd ~= cwd then
+		if M.state then
+			M.state.c:kill()
+		end
+		M.state = nil
+		return start(cwd, function(st)
+			switching = false
+			if st then
+				vim.notify("fx: new session in " .. vim.fn.fnamemodify(cwd, ":~"), vim.log.levels.INFO)
+			end
+		end)
+	end
+	local st = M.state
+	st.c:request("session/new", { cwd = cwd, mcpServers = {} }, function(err, res)
+		switching = false
+		if err or not (res and res.sessionId) then
+			return vim.notify(("fx: session/new failed: %s"):format(err and err.message or "?"), vim.log.levels.ERROR)
+		end
+		st.session_id = res.sessionId
+		adopt(st)
+		fetch_model(st, res)
+		apply_session_options(st)
+		vim.notify("fx: new session", vim.log.levels.INFO)
+	end)
+end
+
+--- A live process, whichever session it happens to be on.
+---@param cb fun(c: fx.Client?, cwd: string, spawned: boolean)
+local function ensure_client(cb)
+	if M.state and not M.state.c.dead then
+		return cb(M.state.c, M.state.cwd, false)
+	end
+	local cwd = vim.fn.getcwd()
+	connect(cwd, function(c)
+		cb(c, cwd, true)
+	end)
+end
+
+--- Resume a saved session: fx keeps its context, the transcript starts empty.
+--- :Fx restart is the path that brings a transcript back.
+---@param id string sessionId from session/list
+function M.resume(id)
+	if busy() then
+		return
+	end
+	-- a live process is enough; going through M.ensure would open a session
+	-- only to abandon it for this one
+	switching = true
+	ensure_client(function(c, cwd, spawned)
+		if not c or (M.state and M.state.session_id == id) then
+			switching = false
+			return
+		end
+		c:request("session/resume", { sessionId = id, cwd = cwd, mcpServers = {} }, function(err, res)
+			switching = false
+			if err then
+				if spawned then
+					c:kill() -- nothing else holds this process
+				end
+				return vim.notify(("fx: session/resume failed: %s"):format(err.message or "?"), vim.log.levels.ERROR)
+			end
+			adopt({ c = c, session_id = id, cwd = cwd })
+			fetch_model(M.state, res)
+			apply_mode(M.state)
+			vim.notify("fx: session resumed", vim.log.levels.INFO)
+		end)
+	end)
+end
+
+--- Saved sessions of the running session's workspace, or of the current
+--- directory when fx is not up yet.
 ---@param cb fun(sessions: table[], current: string?) current is the running sessionId
 function M.list(cb)
 	local function ask(c, current, after)
@@ -230,10 +361,10 @@ function M.list(cb)
 			cb(res and res.sessions or {}, current)
 		end)
 	end
-	if M.state and not M.state.c.dead and M.state.cwd == vim.fn.getcwd() then
+	if M.state and not M.state.c.dead then
 		return ask(M.state.c, M.state.session_id)
 	end
-	connect(nil, function(c)
+	connect(vim.fn.getcwd(), function(c)
 		if c then
 			ask(c, nil, function()
 				c:kill()
@@ -246,8 +377,8 @@ end
 ---@param blocks table[] ACP block
 ---@param ctx fx.Context
 function M.prompt(blocks, ctx)
-	if M.running then
-		return vim.notify("fx: a turn is already running (:Fx stop to interrupt)", vim.log.levels.WARN)
+	if busy() then
+		return
 	end
 	M.running = true
 	M.ensure(function(st)
@@ -256,7 +387,7 @@ function M.prompt(blocks, ctx)
 			return
 		end
 		local ui = require("fx.ui")
-		ui.begin_turn(ctx)
+		ui.begin_turn(ctx, st.session_id)
 		st.c:request("session/prompt", { sessionId = st.session_id, prompt = blocks }, function(err, res)
 			M.running = false
 			vim.cmd("silent! checktime")
@@ -277,17 +408,61 @@ function M.stop()
 	end
 end
 
---- Full restart
+--- Adopt a saved session, replaying its transcript into a fresh buffer.
+---@param c fx.Client
+---@param cwd string
+---@param id string
+---@param cb fun(st: fx.SessionState?)
+local function load(c, cwd, id, cb)
+	local ui = require("fx.ui")
+	local turn = ui.begin_replay(id)
+	replay[id] = { c = c, turn = turn }
+	c:request("session/load", { sessionId = id, cwd = cwd, mcpServers = {} }, function(err, res)
+		replay[id] = nil
+		ui.end_replay(turn)
+		if err then
+			vim.notify(("fx: session/load failed: %s"):format(err.message or "?"), vim.log.levels.ERROR)
+			return cb(nil)
+		end
+		local st = { c = c, session_id = id, cwd = cwd }
+		fetch_model(st, res)
+		apply_mode(st)
+		cb(st)
+	end)
+end
+
+--- Restart the process and reload the session it was on, transcript included.
 function M.restart()
+	if switching then
+		return vim.notify("fx is switching session", vim.log.levels.WARN)
+	end
+	local prev = M.last
 	if M.state then
 		M.state.c:kill()
 		M.state = nil
 	end
 	M.running = false
-	M.ensure(function(st)
-		if st then
-			vim.notify("fx: restarted", vim.log.levels.INFO)
+	if not prev then
+		return M.ensure(function(st)
+			if st then
+				vim.notify("fx: restarted", vim.log.levels.INFO)
+			end
+		end)
+	end
+	switching = true
+	connect(prev.cwd, function(c)
+		if not c then
+			switching = false
+			return
 		end
+		load(c, prev.cwd, prev.id, function(st)
+			switching = false
+			if not st then
+				return c:kill()
+			end
+			adopt(st)
+			vim.notify("fx: restarted, session restored", vim.log.levels.INFO)
+		end)
 	end)
 end
 

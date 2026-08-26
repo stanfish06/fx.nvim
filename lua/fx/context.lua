@@ -18,6 +18,13 @@ local SCOPE = {
 	struct_specifier = true,
 }
 
+local DIAG_LABEL = {
+	[vim.diagnostic.severity.ERROR] = "error",
+	[vim.diagnostic.severity.WARN] = "warn",
+	[vim.diagnostic.severity.INFO] = "info",
+	[vim.diagnostic.severity.HINT] = "hint",
+}
+
 ---@class fx.TsInfo
 ---@field type string?
 ---@field range integer[]? {row1, col1, row2, col2} 1-indexed, end col exclusive
@@ -41,6 +48,7 @@ local SCOPE = {
 ---@field col2 integer? selection end column
 ---@field text string? visual selection
 ---@field ts fx.TsInfo?
+---@field diagnostics string[]?
 ---@field summary string? structured facts for the prompt
 ---@field label string display label, e.g. "foo.c:4-5" or "foo.c:42"
 ---@field request string? user prompt
@@ -191,6 +199,59 @@ local function ts_capture(buf, pos, last, cfg)
 	return info
 end
 
+--- Path relative to the session workspace
+---@param path string
+---@return string
+local function workspace_rel(path)
+	local st = require("fx.session").state
+	local root = st and st.cwd or vim.fn.getcwd()
+	if vim.startswith(path, root .. "/") then
+		return path:sub(#root + 2)
+	end
+	return path -- outside the workspace: absolute, so the agent can still open it
+end
+
+--- Diagnostics
+---@param buf integer
+---@param cfg table {include, nmax}
+---@param lnum1 integer? selection start; nil takes the whole buffer
+---@param lnum2 integer?
+---@return string[]?
+local function diagnostics(buf, cfg, lnum1, lnum2)
+	local items = vim.diagnostic.get(buf)
+	if lnum1 then
+		items = vim.tbl_filter(function(d)
+			return d.lnum + 1 <= lnum2 and (d.end_lnum or d.lnum) + 1 >= lnum1
+		end, items)
+	end
+	if #items == 0 then
+		return nil
+	end
+	-- sorted by severity
+	table.sort(items, function(a, b)
+		if a.severity ~= b.severity then
+			return (a.severity or vim.diagnostic.severity.HINT) < (b.severity or vim.diagnostic.severity.HINT)
+		end
+		return a.lnum < b.lnum
+	end)
+	local nmax = (type(cfg.nmax) == "number" and cfg.nmax >= 1) and cfg.nmax or math.huge
+	local out = {}
+	for i = 1, math.min(#items, nmax) do
+		local d = items[i]
+		out[i] = ("%d:%d %s %s%s"):format(
+			d.lnum + 1,
+			d.col + 1,
+			DIAG_LABEL[d.severity] or "?",
+			d.message:gsub("%s+", " "),
+			d.source and (" [" .. d.source .. "]") or ""
+		)
+	end
+	if #items > nmax then
+		out[#out + 1] = ("... %d more"):format(#items - nmax)
+	end
+	return out
+end
+
 ---@param ctx fx.Context
 ---@param loc string
 local function summarize(ctx, loc)
@@ -230,6 +291,9 @@ local function summarize(ctx, loc)
 			parts[#parts + 1] = "inject: " .. ts.inject
 		end
 	end
+	if ctx.diagnostics then
+		parts[#parts + 1] = "diagnostics:\n" .. table.concat(ctx.diagnostics, "\n")
+	end
 	ctx.summary = table.concat(parts, "\n")
 end
 
@@ -246,7 +310,7 @@ function M.capture_context(range)
 		buf = buf,
 		win = win,
 		path = path,
-		rel = path ~= "" and vim.fn.fnamemodify(path, ":.") or "[No Name]",
+		rel = path ~= "" and workspace_rel(path) or "[No Name]",
 		row = cursor[1],
 	}
 	if range then
@@ -282,6 +346,9 @@ function M.capture_context(range)
 			{ lnum2 - 1, math.min(col2 or #last, #last) },
 			vis.treesitter_nodes or {}
 		)
+		if ac.diagnostics and ac.diagnostics.include then
+			ctx.diagnostics = diagnostics(buf, ac.diagnostics, lnum1, lnum2)
+		end
 		local loc = ctx.rel
 		if vis.row_range and col1 and col2 then
 			loc = ("%s, selected %d:%d-%d:%d"):format(ctx.rel, lnum1, col1, lnum2, col2)
@@ -309,6 +376,9 @@ function M.capture_context(range)
 			ctx.label = ("%s:%d"):format(ctx.rel, ctx.row)
 		end
 		ctx.ts = ts_capture(buf, { ctx.row - 1, cursor[2] }, nil, cur.treesitter_node or {})
+		if ac.diagnostics and ac.diagnostics.include then
+			ctx.diagnostics = diagnostics(buf, ac.diagnostics)
+		end
 		local loc = ctx.rel
 		if cur.row_position and ctx.col then
 			loc = ("%s, cursor at %d:%d"):format(ctx.rel, ctx.row, ctx.col)

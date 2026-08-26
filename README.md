@@ -54,9 +54,11 @@ Defaults (see [config.lua](./lua/fx/config.lua))
 | `:Fx` | open the prompt overlay at the cursor (visual selection becomes context) |
 | `:Fx ask <text>` | send a request directly, skipping the overlay |
 | `:Fx stop` | stop the running turn |
-| `:Fx restart` | restart fx |
+| `:Fx restart` | restart fx and reload the current session (restore previous transcript) |
+| `:Fx new` | start a fresh session |
+| `:Fx resume` | pick a saved session and continue it |
 | `:Fx rewind` | show the last request/response transcript |
-| `:Fx history` | pick a past prompt and view its transcript |
+| `:Fx history` | pick a past prompt of this session and view its transcript |
 | `:Fx list` | list fx sessions |
 | `:Fx model` | pick the model |
 

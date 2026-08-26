@@ -8,12 +8,14 @@ local M = {
 	send_prompt_despite_update_failed = true,
 	output = { width = 64, max_height = 14 }, -- float sizing, used by ui.lua
 	cap_newlines = 1, -- max consecutive newlines in the transcript; 0 or nil disables
+	history_max = 50, -- transcripts kept per session; 0 or nil for all
 	spinner = {
 		frames = { "»  ", "»» ", "»»»", " »»", "  »", "  «", " ««", "«««", "«« ", "«  " },
 		interval = 70,
 	},
 	border = "single", -- float border: single|rounded|double|solid|shadow|none
 	agent_context = {
+		diagnostics = { include = true, nmax = 50 }, -- nmax caps how many are sent; 0 or nil for all
 		cursor = {
 			row_text = true,
 			row_position = true,

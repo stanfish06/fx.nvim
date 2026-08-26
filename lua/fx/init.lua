@@ -51,7 +51,9 @@ end
 
 --- Main entry of the program with the following routes:
 --- > stop: stop the fx session
---- > restart: restart the fx session
+--- > restart: restart fx and reload the current session, old transcript reloaded
+--- > new: start a fresh session
+--- > resume: pick a saved session and continue it
 --- > rewind: check the previous request and agent response
 --- > history: check the full session history
 --- > list: list the workspace's fx sessions, running one first
@@ -67,6 +69,10 @@ function M.main(o)
 		session.stop()
 	elseif sub == "restart" then
 		session.restart()
+	elseif sub == "new" then
+		session.new()
+	elseif sub == "resume" then
+		ui.pick_session()
 	elseif sub == "rewind" then
 		ui.show_last_turn()
 	elseif sub == "history" then
