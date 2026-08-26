@@ -47,6 +47,48 @@ require("fx").setup({ border = "rounded" })
 
 Defaults (see [config.lua](./lua/fx/config.lua))
 
+## Context captured and sent to agent
+- position
+- text selection
+- treesitter node
+- diagnostics
+
+```c
+int main() {
+  printf("hello world! %d", "not int");
+  int sum = 0;
+  for (int i = 1; i < n; ++i) {
+    sum += i;
+  }
+  return 0;
+}
+```
+
+```lua
+{
+  buf = 13,
+  diagnostics = { "2:3 error Call to undeclared library function 'printf' with type 'int (const char *, ...)'; ISO C99 and later do not support implicit function declarations (fix available) [clang]", "4:23 error Use of undeclared identifier 'n' [clang]", "2:29 warn Format specifies type 'int' but the argument has type 'char *' (fix available) [clang]" },
+  label = "hello.c:1-8",
+  lnum1 = 1,
+  lnum2 = 8,
+  path = "/home/stan/Git/fx.nvim/hello.c",
+  rel = "hello.c",
+  row = 1,
+  summary = "hello.c, selected lines 1-8\nts: function_definition 1:1-8:1\nparent: translation_unit\nscope: function_definition 1:1-8:1\ndiagnostics:\n2:3 error Call to undeclared library function 'printf' with type 'int (const char *, ...)'; ISO C99 and later do not support implicit function declarations (fix available) [clang]\n4:23 error Use of undeclared identifier 'n' [clang]\n2:29 warn Format specifies type 'int' but the argument has type 'char *' (fix available) [clang]",
+  text = 'int main() {\n  printf("hello world! %d", "not int");\n  int sum = 0;\n  for (int i = 1; i < n; ++i) {\n    sum += i;\n  }\n  return 0;\n}',
+  ts = {
+    parent = "translation_unit",
+    range = { 1, 1, 8, 1 },
+    scope = {
+      range = { 1, 1, 8, 1 },
+      type = "function_definition"
+    },
+    type = "function_definition"
+  },
+  win = 1002
+}
+```
+
 ## Commands
 
 | Command | Action |
