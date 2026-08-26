@@ -4,9 +4,10 @@ local M = {
 	default_model = "deepseek/deepseek-v4-flash",
 	permission = "yolo",
 	context_limits = { skill_catalog_bytes = 0 },
-	update_file_before_prompt = true, -- force write current file before sending to fx
+	update_file_before_prompt = true, -- force update current file before sending to fx
 	send_prompt_despite_update_failed = true,
 	output = { width = 64, max_height = 14 }, -- float sizing, used by ui.lua
+	cap_newlines = 1, -- max consecutive newlines in the transcript; 0 or nil disables
 	spinner = {
 		frames = { "»  ", "»» ", "»»»", " »»", "  »", "  «", " ««", "«««", "«« ", "«  " },
 		interval = 70,
@@ -44,10 +45,8 @@ local M = {
 	},
 }
 
---- Merge user options
----@param opts table? user config overrides
+---@param opts table?
 function M.setup(opts)
-	-- mutate M in place: other modules hold a reference to this table
 	for k, v in pairs(vim.tbl_deep_extend("force", M, opts or {})) do
 		M[k] = v
 	end

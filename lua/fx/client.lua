@@ -20,7 +20,15 @@ function M.spawn(opts)
 		stdout_buf = "",
 		dead = false,
 	}, Client)
-
+	-- Example:
+	--   Client:
+	--   {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}
+	--   {"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":".","mcpServers":[]}}
+	--   {"jsonrpc":"2.0","id":1,"method":"session/prompt","params":{"sessionId":"1787721810719-1787721810719985710-0ba2e0059ef6c429","prompt":[{"type":"text","text":"hello, tell me a joke"}]}}
+	--   Response:
+	--   {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"1787721810719-1787721810719985710-0ba2e0059ef6c429","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Why do programmers prefer dark mode?\n\n"}}}}
+	--   {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"1787721810719-1787721810719985710-0ba2e0059ef6c429","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Because light attracts bugs."}}}}
+	--   {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"1787721810719-1787721810719985710-0ba2e0059ef6c429","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"\n"}}}}
 	self.proc = vim.system(opts.cmd, {
 		cwd = opts.cwd,
 		env = opts.env,

@@ -9,6 +9,7 @@ local api = vim.api
 ---@field at integer start time
 ---@field tools table<string, {line: integer, title: string}> tool call id -> transcript line
 ---@field last_was_tool boolean
+---@field nl_run integer number of consecutive newlines
 ---@field spinner_frame integer
 ---@field spinner_mark integer?
 ---@field spinner_timer table?
@@ -152,6 +153,7 @@ function M.begin_turn(ctx)
 		at = os.time(),
 		tools = {},
 		last_was_tool = false,
+		nl_run = 1,
 		spinner_frame = 1,
 	}
 	M.turn = turn
@@ -406,6 +408,27 @@ function M._refresh()
 	end
 end
 
+--- Cap the number of consecutive newlines
+---@param t fx.Turn
+---@param text string
+---@return string[] out
+local function split_newline_capped(t, text)
+	local cap = config.cap_newlines
+	cap = (type(cap) == "number" and cap >= 1) and cap or math.huge
+	local out = { "" }
+	for i, line in ipairs(vim.split(text, "\n", { plain = true })) do
+		if i > 1 and t.nl_run < cap then
+			t.nl_run = t.nl_run + 1
+			out[#out + 1] = ""
+		end
+		if line ~= "" then
+			out[#out] = out[#out] .. line
+			t.nl_run = 0
+		end
+	end
+	return out
+end
+
 --- Append agent text to the current transcript.
 ---@param text string
 function M.append_text(text)
@@ -416,12 +439,13 @@ function M.append_text(text)
 	if t.last_was_tool then
 		api.nvim_buf_set_lines(t.buf, -1, -1, false, { "" })
 		t.last_was_tool = false
+		t.nl_run = 1
 	end
-	local lines = vim.split(text, "\n", { plain = true })
+	local out = split_newline_capped(t, text)
 	local last = api.nvim_buf_get_lines(t.buf, -2, -1, false)[1] or ""
-	api.nvim_buf_set_lines(t.buf, -2, -1, false, { last .. lines[1] })
-	if #lines > 1 then
-		api.nvim_buf_set_lines(t.buf, -1, -1, false, vim.list_slice(lines, 2))
+	api.nvim_buf_set_lines(t.buf, -2, -1, false, { last .. out[1] })
+	if #out > 1 then
+		api.nvim_buf_set_lines(t.buf, -1, -1, false, vim.list_slice(out, 2))
 	end
 	M._refresh()
 end
@@ -439,6 +463,7 @@ function M.tool_line(id, title, status)
 	api.nvim_buf_set_lines(t.buf, -1, -1, false, { ("%s %s"):format(glyph[status] or "·", title) })
 	t.tools[id] = { line = api.nvim_buf_line_count(t.buf) - 1, title = title }
 	t.last_was_tool = true
+	t.nl_run = 0
 	M._refresh()
 end
 
@@ -482,13 +507,13 @@ function M.end_turn(err_msg, stop_reason)
 		pcall(api.nvim_buf_del_extmark, t.ctx.buf, ns, t.spinner_mark)
 	end
 	if api.nvim_buf_is_valid(t.buf) then
-		api.nvim_buf_set_lines(
-			t.buf,
-			-1,
-			-1,
-			false,
-			{ "", err_msg and ("✗ " .. err_msg) or ("- " .. (stop_reason or "done")) }
-		)
+		local tail = { err_msg and ("✗ " .. err_msg) or ("- " .. (stop_reason or "done")) }
+		if t.nl_run < 1 then
+			table.insert(tail, 1, "")
+		elseif t.nl_run > 1 then
+			api.nvim_buf_set_lines(t.buf, -(t.nl_run + 1), -1, false, { "" })
+		end
+		api.nvim_buf_set_lines(t.buf, -1, -1, false, tail)
 		M._refresh()
 	end
 	if err_msg then
