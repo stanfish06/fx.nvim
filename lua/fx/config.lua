@@ -1,7 +1,7 @@
 local M = {
 	fx_cmd = { "fx", "acp" },
 	mode = "code",
-	default_model = "deepseek/deepseek-v4-flash",
+	default_model = "zai/glm-5.3-flash",
 	permission = "yolo",
 	context_limits = { skill_catalog_bytes = 0 },
 	update_file_before_prompt = true, -- force update current file before sending to fx
