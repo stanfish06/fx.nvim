@@ -112,6 +112,12 @@ int main() {
 | prompt overlay | `q` / `<Esc>` | cancel |
 | transcript hover | `q` / `<Esc>` | close |
 
+Example settings that match cursor's inline prompt
+```lua
+vim.keymap.set("n", "<leader>k", "<Cmd>Fx<CR>", { silent = true, desc = "fx: inline request" })
+vim.keymap.set("x", "<leader>k", ":Fx<CR>", { silent = true, desc = "fx: inline request" })
+```
+
 ## Color groups
 
 | Group | Controls | Default link |
