@@ -74,6 +74,24 @@ local function cursor_float_cfg(width, height)
 	return cfg
 end
 
+--- Close a float once the cursor leaves it
+---@param win integer
+---@param close fun()
+local function close_on_leave(win, close)
+	local id
+	id = api.nvim_create_autocmd({ "CursorMoved", "WinEnter", "BufEnter" }, {
+		callback = function()
+			if api.nvim_win_is_valid(win) and api.nvim_get_current_win() == win then
+				return
+			end
+			vim.schedule(function()
+				pcall(api.nvim_del_autocmd, id)
+				close()
+			end)
+		end,
+	})
+end
+
 --- Open a small editable float under the cursor to type a request.
 --- TODO: make input box title customizable
 ---@param ctx fx.Context
@@ -100,6 +118,7 @@ function M.input(ctx, cb)
 			api.nvim_win_close(win, true)
 		end
 	end
+	close_on_leave(win, close)
 	local function submit()
 		local text = vim.trim(table.concat(api.nvim_buf_get_lines(buf, 0, -1, false), "\n"))
 		close()
@@ -328,6 +347,7 @@ function M.show_last_turn(turn)
 	vim.wo[turn.win].winhighlight = FLOAT_WINHL
 	vim.keymap.set("n", "q", M.close_output, { buffer = turn.buf })
 	vim.keymap.set("n", "<Esc>", M.close_output, { buffer = turn.buf })
+	close_on_leave(turn.win, M.close_output)
 end
 
 function M.close_output()
@@ -456,6 +476,7 @@ function M.show_sessions(sessions, current)
 	end
 	vim.keymap.set("n", "q", M.close_output, { buffer = buf })
 	vim.keymap.set("n", "<Esc>", M.close_output, { buffer = buf })
+	close_on_leave(M.list_win, M.close_output)
 end
 
 --- Pick a saved session and resume it.
