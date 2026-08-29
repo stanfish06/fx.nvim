@@ -316,14 +316,11 @@ local function ensure_client(cb)
 end
 
 --- Resume a saved session: fx keeps its context, the transcript starts empty.
---- :Fx restart is the path that brings a transcript back.
 ---@param id string sessionId from session/list
 function M.resume(id)
 	if busy() then
 		return
 	end
-	-- a live process is enough; going through M.ensure would open a session
-	-- only to abandon it for this one
 	switching = true
 	ensure_client(function(c, cwd, spawned)
 		if not c or (M.state and M.state.session_id == id) then
@@ -334,7 +331,7 @@ function M.resume(id)
 			switching = false
 			if err then
 				if spawned then
-					c:kill() -- nothing else holds this process
+					c:kill()
 				end
 				return vim.notify(("fx: session/resume failed: %s"):format(err.message or "?"), vim.log.levels.ERROR)
 			end
@@ -350,8 +347,9 @@ end
 --- directory when fx is not up yet.
 ---@param cb fun(sessions: table[], current: string?) current is the running sessionId
 function M.list(cb)
-	local function ask(c, current, after)
-		c:request("session/list", {}, function(err, res)
+	local function ask(c, cwd, current, after)
+		-- fx lists every workspace of the profile when cwd is omitted
+		c:request("session/list", { cwd = cwd }, function(err, res)
 			if after then
 				after()
 			end
@@ -362,11 +360,12 @@ function M.list(cb)
 		end)
 	end
 	if M.state and not M.state.c.dead then
-		return ask(M.state.c, M.state.session_id)
+		return ask(M.state.c, M.state.cwd, M.state.session_id)
 	end
-	connect(vim.fn.getcwd(), function(c)
+	local cwd = vim.fn.getcwd()
+	connect(cwd, function(c)
 		if c then
-			ask(c, nil, function()
+			ask(c, cwd, nil, function()
 				c:kill()
 			end)
 		end
@@ -428,6 +427,25 @@ local function load(c, cwd, id, cb)
 		fetch_model(st, res)
 		apply_mode(st)
 		cb(st)
+	end)
+end
+
+--- Replay the running session's transcript, which :Fx resume leaves empty.
+function M.load()
+	if busy() then
+		return
+	end
+	local st = M.state
+	if not st or st.c.dead then
+		return vim.notify("fx: no session to load", vim.log.levels.INFO)
+	end
+	switching = true
+	load(st.c, st.cwd, st.session_id, function(loaded)
+		switching = false
+		if loaded then
+			adopt(loaded)
+			vim.notify("fx: session history loaded", vim.log.levels.INFO)
+		end
 	end)
 end
 

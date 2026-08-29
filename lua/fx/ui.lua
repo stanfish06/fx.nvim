@@ -406,19 +406,42 @@ local function age(sec)
 	return os.date("%b %d", sec) --[[@as string]]
 end
 
---- session/list entries as {id, at, unused} rows, newest first. The list
---- carries no turn count, so a timestamp that never moved past its creation
---- reads as unused.
----@param sessions table[] {sessionId, cwd, updatedAt} from session/list
+--- Clip s to n display columns, an ellipsis marking the cut.
+---@param s string
+---@param n integer
+---@return string
+local function fit(s, n)
+	if n < 1 then
+		return ""
+	end
+	if vim.fn.strdisplaywidth(s) <= n then
+		return s
+	end
+	local cut = vim.fn.strcharpart(s, 0, n - 1)
+	-- charpart counts characters, so wide ones can still overrun the budget
+	while vim.fn.strdisplaywidth(cut) > n - 1 do
+		cut = vim.fn.strcharpart(cut, 0, vim.fn.strchars(cut) - 1)
+	end
+	return cut .. "…"
+end
+
+--- session/list entries as {id, at, title, unused} rows, newest first. The
+--- list carries no turn count, so a timestamp that never moved past its
+--- creation reads as unused.
+---@param sessions table[] {sessionId, cwd, title, updatedAt} from session/list
 ---@return table[]
 local function session_rows(sessions)
 	local rows = {}
 	for _, s in ipairs(sessions) do
 		local at = type(s.updatedAt) == "string" and epoch(s.updatedAt) or nil
 		local created = tonumber(tostring(s.sessionId):match("^(%d+)"))
+		-- fx titles a session from its first prompt; the placeholder means none
+		local title = s.title ~= "Untitled session" and s.title or nil
 		rows[#rows + 1] = {
 			id = s.sessionId,
 			at = at,
+			-- a buffer line cannot hold newlines
+			title = title and (title:gsub("%s+", " ")) or nil,
 			unused = at and created and at - math.floor(created / 1000) <= 1 or false,
 		}
 	end
@@ -429,7 +452,7 @@ local function session_rows(sessions)
 end
 
 --- Show the workspace's fx sessions in a float, newest first, running one marked.
----@param sessions table[] {sessionId, cwd, updatedAt} from session/list
+---@param sessions table[] {sessionId, cwd, title, updatedAt} from session/list
 ---@param current string? sessionId of the running session
 function M.show_sessions(sessions, current)
 	local rows = session_rows(sessions)
@@ -439,24 +462,27 @@ function M.show_sessions(sessions, current)
 		return vim.notify("fx: no sessions for " .. root, vim.log.levels.INFO)
 	end
 	local lines, current_row = {}, nil
+	local width = float_width()
 	for _, r in ipairs(rows) do
 		local live = current ~= nil and r.id == current
 		if live then
 			current_row = #lines
 		end
-		local line = ("%s %s  %-11s%s"):format(
+		local head = ("%s %s  %-11s"):format(
 			live and "●" or " ",
 			r.at and os.date("%H:%M", r.at) or "--:--",
-			live and "running" or (r.at and age(r.at) or "unknown"),
-			r.unused and not live and "unused" or ""
+			live and "running" or (r.at and age(r.at) or "unknown")
 		)
+		-- a title means the session was prompted, so it supersedes the mark
+		local tail = r.title or (r.unused and not live and "unused" or "")
+		local line = head .. fit(tail, width - vim.fn.strdisplaywidth(head))
 		lines[#lines + 1] = (line:gsub("%s+$", ""))
 	end
 	M.close_output()
 	local buf = api.nvim_create_buf(false, true)
 	vim.bo[buf].bufhidden = "wipe"
 	api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-	local width, height = float_width(), math.min(config.output.max_height, #lines)
+	local height = math.min(config.output.max_height, #lines)
 	M.list_win = api.nvim_open_win(
 		buf,
 		true,
@@ -495,7 +521,8 @@ function M.pick_session()
 				if not r.at then
 					return r.id
 				end
-				return ("%s  %s%s"):format(os.date("%H:%M", r.at), age(r.at), r.unused and "  unused" or "")
+				local tail = r.title or (r.unused and "unused" or "")
+				return ("%s  %s%s"):format(os.date("%H:%M", r.at), age(r.at), tail ~= "" and "  " .. tail or "")
 			end,
 		}, function(choice)
 			if choice then

@@ -54,6 +54,7 @@ end
 --- > restart: restart fx and reload the current session, old transcript reloaded
 --- > new: start a fresh session
 --- > resume: pick a saved session and continue it
+--- > load: replay the running session's transcript
 --- > rewind: check the previous request and agent response
 --- > history: check the full session history
 --- > list: list the workspace's fx sessions, running one first
@@ -73,6 +74,8 @@ function M.main(o)
 		session.new()
 	elseif sub == "resume" then
 		ui.pick_session()
+	elseif sub == "load" then
+		session.load()
 	elseif sub == "rewind" then
 		ui.show_last_turn()
 	elseif sub == "history" then

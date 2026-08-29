@@ -96,9 +96,10 @@ int main() {
 | `:Fx` | open the prompt overlay at the cursor (visual selection becomes context) |
 | `:Fx ask <text>` | send a request directly, skipping the overlay |
 | `:Fx stop` | stop the running turn |
-| `:Fx restart` | restart fx and reload the current session (restore previous transcript) |
+| `:Fx restart` | restart fx and reload the current session (replay session history as well) |
 | `:Fx new` | start a fresh session |
-| `:Fx resume` | pick a saved session and continue it |
+| `:Fx resume` | pick a saved session and continue it (without replaying session history, same as acp method session/resume) |
+| `:Fx load` | load and replay current session's history (same as acp method session/load) |
 | `:Fx rewind` | show the last request/response transcript |
 | `:Fx history` | pick a past prompt of this session and view its transcript |
 | `:Fx list` | list fx sessions |
@@ -112,10 +113,23 @@ int main() {
 | prompt overlay | `q` / `<Esc>` | cancel |
 | transcript hover | `q` / `<Esc>` | close |
 
-Example settings that match cursor's inline prompt
+Example settings (leader k for inline prompt)
 ```lua
 vim.keymap.set("n", "<leader>k", "<Cmd>Fx<CR>", { silent = true, desc = "fx: inline request" })
 vim.keymap.set("x", "<leader>k", ":Fx<CR>", { silent = true, desc = "fx: inline request" })
+vim.keymap.set("n", "<leader>K", "<Cmd>Fx rewind<CR>", { silent = true, desc = "fx: rewind" })
+
+vim.api.nvim_create_autocmd("ColorScheme", {
+    group = vim.api.nvim_create_augroup("FxTheme", { clear = true }),
+    pattern = "*",
+    desc = "fx",
+    callback = function()
+        vim.api.nvim_set_hl(0, "FxSpinner", { fg = "#98C379" })
+        vim.api.nvim_set_hl(0, "FxNormal", { fg = "#D8D4CD", bg = "#1A2132" })
+        vim.api.nvim_set_hl(0, "FxBorder", { fg = "#3E8FB0" })
+        vim.api.nvim_set_hl(0, "FxTitle", { fg = "#E5C07B", bold = true })
+    end,
+})
 ```
 
 ## Color groups

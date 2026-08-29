@@ -15,6 +15,6 @@ end, {
 		end
 		return vim.tbl_filter(function(c)
 			return vim.startswith(c, arglead)
-		end, { "ask", "list", "model", "new", "resume", "stop", "restart", "rewind", "history" })
+		end, { "ask", "list", "load", "model", "new", "resume", "stop", "restart", "rewind", "history" })
 	end,
 })
