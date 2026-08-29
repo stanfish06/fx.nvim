@@ -297,8 +297,7 @@ local function latest()
 	return (list and list[#list]) or M.turn
 end
 
---- Show a turn's transcript in an unfocused float, anchored near where the
---- request was made (editor corner if that window is gone). q/<Esc> closes.
+--- Show a turn's transcript
 ---@param turn fx.Turn? defaults to the running session's newest turn
 function M.show_last_turn(turn)
 	turn = turn or latest()
@@ -382,12 +381,9 @@ local function epoch(iso)
 		isdst = false,
 	}
 	local now = os.time()
-	-- os.time reads both field sets as local standard time, so the zone offset
-	-- measured from now cancels out of the parsed timestamp
 	return os.time(fields) + os.difftime(now, os.time(os.date("!*t", now) --[[@as osdateparam]]))
 end
 
---- Time since an epoch timestamp, at the coarsest useful unit.
 ---@param sec integer
 ---@return string
 local function age(sec)
@@ -406,7 +402,7 @@ local function age(sec)
 	return os.date("%b %d", sec) --[[@as string]]
 end
 
---- Clip s to n display columns, an ellipsis marking the cut.
+--- Clip s to n display columns
 ---@param s string
 ---@param n integer
 ---@return string
@@ -425,9 +421,7 @@ local function fit(s, n)
 	return cut .. "…"
 end
 
---- session/list entries as {id, at, title, unused} rows, newest first. The
---- list carries no turn count, so a timestamp that never moved past its
---- creation reads as unused.
+--- session/list entries as {id, at, title, unused} rows, newest first.
 ---@param sessions table[] {sessionId, cwd, title, updatedAt} from session/list
 ---@return table[]
 local function session_rows(sessions)
@@ -435,12 +429,10 @@ local function session_rows(sessions)
 	for _, s in ipairs(sessions) do
 		local at = type(s.updatedAt) == "string" and epoch(s.updatedAt) or nil
 		local created = tonumber(tostring(s.sessionId):match("^(%d+)"))
-		-- fx titles a session from its first prompt; the placeholder means none
 		local title = s.title ~= "Untitled session" and s.title or nil
 		rows[#rows + 1] = {
 			id = s.sessionId,
 			at = at,
-			-- a buffer line cannot hold newlines
 			title = title and (title:gsub("%s+", " ")) or nil,
 			unused = at and created and at - math.floor(created / 1000) <= 1 or false,
 		}
@@ -570,8 +562,7 @@ function M._height(turn)
 	return math.min(config.output.max_height, math.max(2, count))
 end
 
---- Resize the current turn's float to fit and keep the tail visible,
---- unless the user has focused the float (don't fight their scrolling).
+--- Resize the current turn's float to fit and keep the tail visible.
 function M._refresh()
 	local t = M.turn
 	if not t or not t.win or not api.nvim_win_is_valid(t.win) then
@@ -626,7 +617,6 @@ function M.append_text(text)
 end
 
 --- Add a tool-activity line ("✓ Editing", "… Searching") to the transcript
---- and remember its position so later status updates can rewrite it.
 ---@param id string toolCallId from the session update
 ---@param title string human-readable tool action
 ---@param status string "pending" | "in_progress" | "completed" | "failed"
@@ -665,7 +655,7 @@ function M.tool_status(id, status)
 end
 
 --- Finish the current turn: stop the spinner, append the outcome line to the
---- transcript, and notify (errors loudly, success quietly).
+--- transcript, and notify.
 ---@param err_msg string? error text if the prompt request failed
 ---@param stop_reason string? ACP stopReason ("end_turn", "cancelled", ...)
 function M.end_turn(err_msg, stop_reason)
