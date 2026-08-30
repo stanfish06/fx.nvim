@@ -297,6 +297,40 @@ local function latest()
 	return (list and list[#list]) or M.turn
 end
 
+local export_count = 0
+
+--- Copy a transcript into a throwaway buffer shown in a split or tab
+---@param turn fx.Turn
+---@param how "split"|"tab"
+local function export_turn(turn, how)
+	local lines = api.nvim_buf_get_lines(turn.buf, 0, -1, false)
+	M.close_output()
+	local buf = api.nvim_create_buf(false, true)
+	vim.bo[buf].bufhidden = "wipe"
+	vim.bo[buf].filetype = "markdown"
+	api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+	export_count = export_count + 1
+	pcall(api.nvim_buf_set_name, buf, ("fx-export-%d %s"):format(export_count, turn.ctx and turn.ctx.label or ""))
+	local win
+	if how == "tab" then
+		vim.cmd(("tab sbuffer %d"):format(buf))
+		win = api.nvim_get_current_win()
+	else
+		win = api.nvim_open_win(buf, true, { split = "below" })
+	end
+	vim.wo[win].wrap = true
+	vim.wo[win].linebreak = true
+	api.nvim_create_autocmd("WinClosed", {
+		pattern = tostring(win),
+		once = true,
+		callback = function()
+			if api.nvim_buf_is_valid(buf) then
+				pcall(api.nvim_buf_delete, buf, { force = true })
+			end
+		end,
+	})
+end
+
 --- Show a turn's transcript
 ---@param turn fx.Turn? defaults to the running session's newest turn
 function M.show_last_turn(turn)
@@ -346,6 +380,12 @@ function M.show_last_turn(turn)
 	vim.wo[turn.win].winhighlight = FLOAT_WINHL
 	vim.keymap.set("n", "q", M.close_output, { buffer = turn.buf })
 	vim.keymap.set("n", "<Esc>", M.close_output, { buffer = turn.buf })
+	vim.keymap.set("n", "<leader>s", function()
+		export_turn(turn, "split")
+	end, { buffer = turn.buf })
+	vim.keymap.set("n", "<leader>t", function()
+		export_turn(turn, "tab")
+	end, { buffer = turn.buf })
 	close_on_leave(turn.win, M.close_output)
 end
 

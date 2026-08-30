@@ -112,6 +112,7 @@ int main() {
 | prompt overlay | `<CR>` | submit |
 | prompt overlay | `q` / `<Esc>` | cancel |
 | transcript hover | `q` / `<Esc>` | close |
+| transcript hover | `<leader>s` / `<leader>t` | export (make a copy) transcript to a new split/window |
 
 Example settings (leader k for inline prompt)
 ```lua
