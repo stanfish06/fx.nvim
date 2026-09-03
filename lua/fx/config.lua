@@ -1,7 +1,7 @@
 local M = {
 	fx_cmd = { "fx", "acp" },
 	mode = "code",
-	default_model = "zai/glm-5.3-flash",
+	default_model = "meta/muse-spark-1.3-contributor",
 	permission = "yolo",
 	context_limits = { skill_catalog_bytes = 0 },
 	update_file_before_prompt = true, -- force update current file before sending to fx
