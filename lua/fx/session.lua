@@ -84,9 +84,9 @@ function M._on_update(u)
 	if kind == "agent_message_chunk" and u.content and u.content.text then
 		ui.append_text(u.content.text)
 	elseif kind == "tool_call" then
-		ui.tool_line(u.toolCallId, u.title or "?", u.status or "pending")
+		ui.tool_line(u.toolCallId, u.title or "?", u.status or "pending", u.kind)
 	elseif kind == "tool_call_update" then
-		ui.tool_status(u.toolCallId, u.status)
+		ui.tool_status(u.toolCallId, u.status, u)
 		if u.status == "completed" or u.status == "failed" then
 			-- fx may have edited files on disk; sync buffers
 			schedule_checktime()

@@ -9,9 +9,10 @@ local api = vim.api
 ---@field replayed boolean?
 ---@field request string
 ---@field at integer start time
----@field tools table<string, {line: integer, title: string}> tool call id -> transcript line
----@field last_was_tool boolean
+---@field tools table<string, {line: integer, verb: string, detail: string?}> tool call id -> transcript line
+---@field segment "text"|"tools"? kind of the block being written; a change inserts a blank line
 ---@field nl_run integer number of consecutive newlines
+---@field fence boolean inside a ``` block
 ---@field spinner_frame integer
 ---@field spinner_mark integer?
 ---@field spinner_timer table?
@@ -28,6 +29,15 @@ local spinner_frames = config.spinner.frames
 local spinner_interval = config.spinner.interval or 120
 
 local glyph = { pending = "·", in_progress = "…", completed = "✓", failed = "✗" }
+local verb = {
+	read = "read",
+	edit = "edit",
+	delete = "delete",
+	move = "move",
+	search = "search",
+	execute = "run",
+	fetch = "fetch",
+}
 
 local function set_hl()
 	api.nvim_set_hl(0, "FxSpinner", { link = "DiagnosticVirtualTextInfo", default = true })
@@ -163,7 +173,62 @@ local function transcript_buf()
 	local buf = api.nvim_create_buf(false, true)
 	vim.bo[buf].bufhidden = "hide"
 	vim.bo[buf].filetype = "markdown"
+	pcall(vim.treesitter.start, buf, "markdown")
 	return buf
+end
+
+---@param turn table fx.Turn without its streaming fields
+---@return fx.Turn
+local function reset_stream(turn)
+	turn.tools = {}
+	turn.segment = nil
+	turn.nl_run = 1
+	turn.fence = false
+	turn.spinner_frame = 1
+	return turn
+end
+
+--- End the current segment: one blank line, then an empty line for the next writer.
+---@param t fx.Turn
+local function boundary(t)
+	local n = api.nvim_buf_line_count(t.buf)
+	local lines = api.nvim_buf_get_lines(t.buf, 0, -1, false)
+	while n > 1 and lines[n] == "" do
+		n = n - 1
+	end
+	-- nl_run == 0 means lines[n] was never newline-terminated, so the fence scan has not seen it
+	if t.segment == "text" and t.nl_run == 0 and lines[n]:match("^%s*```") then
+		t.fence = not t.fence
+	end
+	local tail = { "", "" }
+	if t.fence then
+		-- a list item or the footer cannot live inside a code block; close it
+		table.insert(tail, 1, "```")
+		t.fence = false
+	end
+	api.nvim_buf_set_lines(t.buf, n, -1, false, tail)
+	t.segment = nil
+	t.nl_run = 2 -- at the cap, so leading newlines in the next chunk add nothing
+end
+
+--- Write the "## ❯ request" heading, with an optional meta line under it.
+---@param t fx.Turn
+---@param request string
+---@param meta string?
+local function heading(t, request, meta)
+	local lines = { "## ❯ " .. request:gsub("\n", " ") }
+	if meta then
+		lines[#lines + 1] = meta
+	end
+	lines[#lines + 1] = ""
+	if api.nvim_buf_line_count(t.buf) == 1 and api.nvim_buf_get_lines(t.buf, 0, 1, false)[1] == "" then
+		api.nvim_buf_set_lines(t.buf, 0, -1, false, lines)
+	else
+		boundary(t)
+		api.nvim_buf_set_lines(t.buf, -2, -1, false, lines)
+	end
+	t.segment = nil
+	t.nl_run = 1
 end
 
 --- Make a turn current, dropping its session's oldest turns past config.history_max.
@@ -195,19 +260,15 @@ end
 ---@param session_id string
 function M.begin_turn(ctx, session_id)
 	M.close_output()
-	local buf = transcript_buf()
-	api.nvim_buf_set_lines(buf, 0, -1, false, { "❯ " .. ctx.request:gsub("\n", " "), "" })
-	local turn = {
+	local turn = reset_stream({
 		ctx = ctx,
 		session_id = session_id,
-		buf = buf,
+		buf = transcript_buf(),
 		request = ctx.request,
 		at = os.time(),
-		tools = {},
-		last_was_tool = false,
-		nl_run = 1,
-		spinner_frame = 1,
-	}
+	})
+	local model = require("fx.session").current_model():gsub("^.*/", "")
+	heading(turn, ctx.request, ("`%s` · %s · %s"):format(ctx.label, model, os.date("%H:%M", turn.at)))
 	push_turn(turn)
 	if api.nvim_buf_is_valid(ctx.buf) then
 		turn.spinner_mark = api.nvim_buf_set_extmark(ctx.buf, ns, math.max(ctx.row - 1, 0), 0, {
@@ -248,16 +309,12 @@ end
 ---@return fx.Turn
 function M.begin_replay(session_id)
 	M.close_output()
-	return {
+	return reset_stream({
 		session_id = session_id,
 		buf = transcript_buf(),
 		request = "restored session",
 		at = os.time(),
-		tools = {},
-		last_was_tool = false,
-		nl_run = 1,
-		spinner_frame = 1,
-	}
+	})
 end
 
 --- Discard a replay transcript that never received a message.
@@ -276,16 +333,17 @@ function M.replay_chunk(turn, u)
 	if not text or not api.nvim_buf_is_valid(turn.buf) then
 		return
 	end
-	local lines =
-		vim.split(u.sessionUpdate == "user_message_chunk" and ("❯ " .. text) or text, "\n", { plain = true })
-	if turn.replayed then
-		table.insert(lines, 1, "") -- blank line between messages
-		api.nvim_buf_set_lines(turn.buf, -1, -1, false, lines)
-	else
+	if not turn.replayed then
 		-- joins the history
 		turn.replayed = true
 		push_turn(turn)
-		api.nvim_buf_set_lines(turn.buf, 0, -1, false, lines)
+	end
+	if u.sessionUpdate == "user_message_chunk" then
+		local request, summary = text:match("^(.-)\n\ncontext:\n(.*)$")
+		local loc = summary and summary:match("^[^\n]*")
+		heading(turn, request or text, loc and ("`%s`"):format(loc) or nil)
+	else
+		M._append(turn, "\n\n" .. text)
 	end
 end
 
@@ -378,6 +436,10 @@ function M.show_last_turn(turn)
 	vim.wo[turn.win].wrap = true
 	vim.wo[turn.win].linebreak = true
 	vim.wo[turn.win].winhighlight = FLOAT_WINHL
+	vim.wo[turn.win].conceallevel = 2 -- hide fence markers and emphasis
+	vim.wo[turn.win].foldmethod = "expr"
+	vim.wo[turn.win].foldexpr = "v:lua.vim.treesitter.foldexpr()"
+	vim.wo[turn.win].foldlevel = 99
 	vim.keymap.set("n", "q", M.close_output, { buffer = turn.buf })
 	vim.keymap.set("n", "<Esc>", M.close_output, { buffer = turn.buf })
 	vim.keymap.set("n", "<leader>s", function()
@@ -614,18 +676,25 @@ function M._refresh()
 	end
 end
 
---- Cap the number of consecutive newlines
+--- Split streamed text into lines, capping consecutive newlines outside ``` fences.
 ---@param t fx.Turn
 ---@param text string
+---@param last string transcript line the first piece continues
 ---@return string[] out
-local function split_newline_capped(t, text)
+local function split_newline_capped(t, text, last)
 	local cap = config.cap_newlines
 	cap = (type(cap) == "number" and cap >= 1) and cap or math.huge
 	local out = { "" }
 	for i, line in ipairs(vim.split(text, "\n", { plain = true })) do
-		if i > 1 and t.nl_run < cap then
-			t.nl_run = t.nl_run + 1
-			out[#out + 1] = ""
+		if i > 1 then
+			local done = (i == 2 and last or "") .. out[#out]
+			if done:match("^%s*```") then
+				t.fence = not t.fence
+			end
+			if t.fence or t.nl_run < cap then
+				t.nl_run = t.nl_run + 1
+				out[#out + 1] = ""
+			end
 		end
 		if line ~= "" then
 			out[#out] = out[#out] .. line
@@ -635,6 +704,24 @@ local function split_newline_capped(t, text)
 	return out
 end
 
+---@param t fx.Turn
+---@param text string
+function M._append(t, text)
+	if t.segment ~= "text" then
+		if text:match("^%s*$") then
+			return -- whitespace between tool calls; not worth a text segment
+		end
+		boundary(t)
+		t.segment = "text"
+	end
+	local last = api.nvim_buf_get_lines(t.buf, -2, -1, false)[1] or ""
+	local out = split_newline_capped(t, text, last)
+	api.nvim_buf_set_lines(t.buf, -2, -1, false, { last .. out[1] })
+	if #out > 1 then
+		api.nvim_buf_set_lines(t.buf, -1, -1, false, vim.list_slice(out, 2))
+	end
+end
+
 --- Append agent text to the current transcript.
 ---@param text string
 function M.append_text(text)
@@ -642,40 +729,67 @@ function M.append_text(text)
 	if not t or not api.nvim_buf_is_valid(t.buf) then
 		return
 	end
-	if t.last_was_tool then
-		api.nvim_buf_set_lines(t.buf, -1, -1, false, { "" })
-		t.last_was_tool = false
-		t.nl_run = 1
-	end
-	local out = split_newline_capped(t, text)
-	local last = api.nvim_buf_get_lines(t.buf, -2, -1, false)[1] or ""
-	api.nvim_buf_set_lines(t.buf, -2, -1, false, { last .. out[1] })
-	if #out > 1 then
-		api.nvim_buf_set_lines(t.buf, -1, -1, false, vim.list_slice(out, 2))
-	end
+	M._append(t, text)
 	M._refresh()
 end
 
---- Add a tool-activity line ("✓ Editing", "… Searching") to the transcript
+--- Path or command a tool call reported
+---@param u table tool_call_update payload
+---@return string?
+local function tool_detail(u)
+	if u.command_result and u.command_result.command then
+		return u.command_result.command
+	end
+	for _, c in ipairs(u.content or {}) do
+		local text = c.type == "content" and c.content and c.content.text
+		if type(text) == "string" then
+			local path = text:match("<path>(.-)</path>") or text:match("^edited (%S+)")
+			if path then
+				return path
+			end
+		end
+	end
+end
+
+---@param status string
+---@param info {verb: string, detail: string?}
+---@return string
+local function tool_item(status, info)
+	return ("- %s %s%s"):format(glyph[status] or "·", info.verb, info.detail and (" `" .. info.detail .. "`") or "")
+end
+
+--- Add a tool call as a list item ("- ✓ edit `hello.c`") to the transcript
 ---@param id string toolCallId from the session update
 ---@param title string human-readable tool action
 ---@param status string "pending" | "in_progress" | "completed" | "failed"
-function M.tool_line(id, title, status)
+---@param kind string? ACP tool kind (read, edit, search, execute, ...)
+function M.tool_line(id, title, status, kind)
 	local t = M.turn
 	if not t or not api.nvim_buf_is_valid(t.buf) then
 		return
 	end
-	api.nvim_buf_set_lines(t.buf, -1, -1, false, { ("%s %s"):format(glyph[status] or "·", title) })
-	t.tools[id] = { line = api.nvim_buf_line_count(t.buf) - 1, title = title }
-	t.last_was_tool = true
-	t.nl_run = 0
+	if t.segment ~= "tools" then
+		-- even hidden, the call still splits the text before and after it
+		boundary(t)
+		t.segment = "tools"
+	end
+	if not config.transcript.tool_calls then
+		return
+	end
+	local info = { verb = verb[kind] or title:lower() }
+	-- boundary() left an empty line; the item takes it
+	api.nvim_buf_set_lines(t.buf, -2, -1, false, { tool_item(status, info) })
+	info.line = api.nvim_buf_line_count(t.buf) - 1
+	api.nvim_buf_set_lines(t.buf, -1, -1, false, { "" })
+	t.tools[id] = info
+	t.nl_run = 1
 	M._refresh()
 end
 
---- Update the status glyph of a previously added tool line in place.
 ---@param id string toolCallId from the session update
 ---@param status string "pending" | "in_progress" | "completed" | "failed"
-function M.tool_status(id, status)
+---@param u table? the tool_call_update payload, mined for a path or command
+function M.tool_status(id, status, u)
 	local t = M.turn
 	if not t or not api.nvim_buf_is_valid(t.buf) then
 		return
@@ -684,13 +798,8 @@ function M.tool_status(id, status)
 	if not info then
 		return
 	end
-	api.nvim_buf_set_lines(
-		t.buf,
-		info.line,
-		info.line + 1,
-		false,
-		{ ("%s %s"):format(glyph[status] or "·", info.title) }
-	)
+	info.detail = info.detail or (u and tool_detail(u))
+	api.nvim_buf_set_lines(t.buf, info.line, info.line + 1, false, { tool_item(status, info) })
 	M._refresh()
 end
 
@@ -712,13 +821,10 @@ function M.end_turn(err_msg, stop_reason)
 		pcall(api.nvim_buf_del_extmark, t.ctx.buf, ns, t.spinner_mark)
 	end
 	if api.nvim_buf_is_valid(t.buf) then
-		local tail = { err_msg and ("✗ " .. err_msg) or ("- " .. (stop_reason or "done")) }
-		if t.nl_run < 1 then
-			table.insert(tail, 1, "")
-		elseif t.nl_run > 1 then
-			api.nvim_buf_set_lines(t.buf, -(t.nl_run + 1), -1, false, { "" })
-		end
-		api.nvim_buf_set_lines(t.buf, -1, -1, false, tail)
+		boundary(t) -- also closes a fence a cut-off turn left open
+		local status = err_msg and ("✗ " .. err_msg)
+			or ("*%s · %ds*"):format(stop_reason or "done", os.time() - t.at)
+		api.nvim_buf_set_lines(t.buf, -2, -1, false, { "---", status })
 		M._refresh()
 	end
 	if err_msg then

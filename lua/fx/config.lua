@@ -7,8 +7,11 @@ local M = {
 	update_file_before_prompt = true, -- force update current file before sending to fx
 	send_prompt_despite_update_failed = true,
 	output = { width = 64, max_height = 14 }, -- float sizing, used by ui.lua
-	cap_newlines = 1, -- max consecutive newlines in the transcript; 0 or nil disables
+	cap_newlines = 2, -- max consecutive newlines in the transcript (2 = one blank line); 0 or nil disables
 	history_max = 50, -- transcripts kept per session; 0 or nil for all
+	transcript = {
+		tool_calls = true, -- false hides tool calls
+	},
 	spinner = {
 		frames = { "»  ", "»» ", "»»»", " »»", "  »", "  «", " ««", "«««", "«« ", "«  " },
 		interval = 70,
