@@ -10,7 +10,7 @@ local api = vim.api
 ---@field request string
 ---@field at integer start time
 ---@field tools table<string, {line: integer, verb: string, detail: string?}> tool call id -> transcript line
----@field segment "text"|"tools"? kind of the block being written; a change inserts a blank line
+---@field segment "text"|"reasoning"|"tools"? kind of the block being written; a change inserts a blank line
 ---@field nl_run integer number of consecutive newlines
 ---@field fence boolean inside a ``` block
 ---@field spinner_frame integer
@@ -188,12 +188,11 @@ local function reset_stream(turn)
 	return turn
 end
 
---- End the current segment: one blank line, then an empty line for the next writer.
 ---@param t fx.Turn
 local function boundary(t)
 	local n = api.nvim_buf_line_count(t.buf)
 	local lines = api.nvim_buf_get_lines(t.buf, 0, -1, false)
-	while n > 1 and lines[n] == "" do
+	while n > 1 and (lines[n] == "" or lines[n] == "> ") do
 		n = n - 1
 	end
 	-- nl_run == 0 means lines[n] was never newline-terminated, so the fence scan has not seen it
@@ -706,16 +705,26 @@ end
 
 ---@param t fx.Turn
 ---@param text string
-function M._append(t, text)
-	if t.segment ~= "text" then
+---@param segment "text"|"reasoning"? defaults to "text"; reasoning renders as a "> " blockquote
+function M._append(t, text, segment)
+	segment = segment or "text"
+	if t.segment ~= segment then
 		if text:match("^%s*$") then
-			return -- whitespace between tool calls; not worth a text segment
+			return
 		end
 		boundary(t)
-		t.segment = "text"
+		t.segment = segment
+		if segment == "reasoning" then
+			api.nvim_buf_set_lines(t.buf, -2, -1, false, { "> " })
+		end
 	end
 	local last = api.nvim_buf_get_lines(t.buf, -2, -1, false)[1] or ""
 	local out = split_newline_capped(t, text, last)
+	if segment == "reasoning" then
+		for i = 2, #out do
+			out[i] = "> " .. out[i]
+		end
+	end
 	api.nvim_buf_set_lines(t.buf, -2, -1, false, { last .. out[1] })
 	if #out > 1 then
 		api.nvim_buf_set_lines(t.buf, -1, -1, false, vim.list_slice(out, 2))
@@ -724,16 +733,34 @@ end
 
 --- Append agent text to the current transcript.
 ---@param text string
-function M.append_text(text)
+---@param segment "text"|"reasoning"? reasoning is skipped when config.transcript.reasoning is false
+function M.append_text(text, segment)
 	local t = M.turn
 	if not t or not api.nvim_buf_is_valid(t.buf) then
 		return
 	end
-	M._append(t, text)
+	if segment == "reasoning" and not config.transcript.reasoning then
+		return
+	end
+	M._append(t, text, segment)
 	M._refresh()
 end
 
---- Path or command a tool call reported
+---@param raw table? tool arguments as the model sent them
+---@return string?
+local function raw_detail(raw)
+	raw = raw or {}
+	if type(raw.path) == "string" then
+		return vim.fn.fnamemodify(raw.path, ":~:.")
+	end
+	for _, k in ipairs({ "command", "pattern", "query", "url", "agent" }) do
+		if type(raw[k]) == "string" then
+			return raw[k]
+		end
+	end
+end
+
+--- Path or command of a tool call
 ---@param u table tool_call_update payload
 ---@return string?
 local function tool_detail(u)
@@ -755,15 +782,12 @@ end
 ---@param info {verb: string, detail: string?}
 ---@return string
 local function tool_item(status, info)
-	return ("- %s %s%s"):format(glyph[status] or "·", info.verb, info.detail and (" `" .. info.detail .. "`") or "")
+	local detail = info.detail and (" `" .. info.detail:gsub("%s+", " ") .. "`") or ""
+	return ("- %s %s%s"):format(glyph[status] or "·", info.verb, detail)
 end
 
---- Add a tool call as a list item ("- ✓ edit `hello.c`") to the transcript
----@param id string toolCallId from the session update
----@param title string human-readable tool action
----@param status string "pending" | "in_progress" | "completed" | "failed"
----@param kind string? ACP tool kind (read, edit, search, execute, ...)
-function M.tool_line(id, title, status, kind)
+---@param u table tool_call payload {toolCallId, name, title, kind, status, rawInput?}
+function M.tool_line(u)
 	local t = M.turn
 	if not t or not api.nvim_buf_is_valid(t.buf) then
 		return
@@ -776,12 +800,12 @@ function M.tool_line(id, title, status, kind)
 	if not config.transcript.tool_calls then
 		return
 	end
-	local info = { verb = verb[kind] or title:lower() }
+	local info = { verb = verb[u.kind] or (u.name or u.title or "?"):lower(), detail = raw_detail(u.rawInput) }
 	-- boundary() left an empty line; the item takes it
-	api.nvim_buf_set_lines(t.buf, -2, -1, false, { tool_item(status, info) })
+	api.nvim_buf_set_lines(t.buf, -2, -1, false, { tool_item(u.status or "pending", info) })
 	info.line = api.nvim_buf_line_count(t.buf) - 1
 	api.nvim_buf_set_lines(t.buf, -1, -1, false, { "" })
-	t.tools[id] = info
+	t.tools[u.toolCallId] = info
 	t.nl_run = 1
 	M._refresh()
 end

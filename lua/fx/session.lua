@@ -83,8 +83,10 @@ function M._on_update(u)
 	local kind = u.sessionUpdate
 	if kind == "agent_message_chunk" and u.content and u.content.text then
 		ui.append_text(u.content.text)
+	elseif kind == "agent_thought_chunk" and u.content and u.content.text then
+		ui.append_text(u.content.text, "reasoning")
 	elseif kind == "tool_call" then
-		ui.tool_line(u.toolCallId, u.title or "?", u.status or "pending", u.kind)
+		ui.tool_line(u)
 	elseif kind == "tool_call_update" then
 		ui.tool_status(u.toolCallId, u.status, u)
 		if u.status == "completed" or u.status == "failed" then
