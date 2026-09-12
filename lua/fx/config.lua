@@ -1,12 +1,13 @@
 local M = {
 	fx_cmd = { "fx", "acp" },
 	mode = "code",
-	default_model = "meta/muse-spark-1.3-contributor",
+	default_model = "deepseek/deepseek-v4.1-flash",
+	default_effort = nil,
 	permission = "yolo",
 	context_limits = { skill_catalog_bytes = 0 },
 	update_file_before_prompt = true, -- force update current file before sending to fx
 	send_prompt_despite_update_failed = true,
-	output = { width = 64, max_height = 14 }, -- float sizing, used by ui.lua
+	output = { width = 80, max_height = 14 }, -- float sizing, used by ui.lua
 	cap_newlines = 1, -- max consecutive newlines in the transcript (2 = one blank line); 0 or nil disables
 	history_max = 50, -- transcripts kept per session; 0 or nil for all
 	transcript = {

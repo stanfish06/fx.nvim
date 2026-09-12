@@ -59,6 +59,7 @@ end
 --- > history: check the full session history
 --- > list: list the workspace's fx sessions, running one first
 --- > model: pick the model fx uses for this session
+--- > effort: pick the reasoning effort of the session's model
 --- > ask <text>: directly send input text to agent (ask alone opens the input box)
 --- > nil: open the input box to enter the prompt
 ---@param o table arguments
@@ -84,6 +85,8 @@ function M.main(o)
 		session.list(ui.show_sessions)
 	elseif sub == "model" then
 		ui.pick_model()
+	elseif sub == "effort" then
+		ui.pick_effort()
 	elseif sub == "ask" or sub == nil then
 		local prompt = table.concat(vim.list_slice(o.fargs, 2), " ")
 		M.ask(o.range > 0 and { o.line1, o.line2 } or nil, prompt)

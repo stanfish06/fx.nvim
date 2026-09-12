@@ -104,6 +104,7 @@ int main() {
 | `:Fx history` | pick a past prompt of this session and view its transcript |
 | `:Fx list` | list fx sessions |
 | `:Fx model` | pick the model |
+| `:Fx effort` | pick the reasoning effort |
 
 ## Key binds
 

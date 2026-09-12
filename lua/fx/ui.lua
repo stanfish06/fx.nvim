@@ -56,6 +56,56 @@ local function float_width()
 	return math.min(config.output.width, vim.o.columns - 8)
 end
 
+--- Clip s to n display columns
+---@param s string
+---@param n integer
+---@return string
+local function fit(s, n)
+	if n < 1 then
+		return ""
+	end
+	if vim.fn.strdisplaywidth(s) <= n then
+		return s
+	end
+	local cut = vim.fn.strcharpart(s, 0, n - 1)
+	-- charpart counts characters, so wide ones can still overrun the budget
+	while vim.fn.strdisplaywidth(cut) > n - 1 do
+		cut = vim.fn.strcharpart(cut, 0, vim.fn.strchars(cut) - 1)
+	end
+	return cut .. "…"
+end
+
+--- " fx · a · b " from the non-nil parts, clipped to the float width.
+---@param ... string?
+---@return string
+local function float_title(...)
+	local parts = { "fx" }
+	for i = 1, select("#", ...) do
+		local p = select(i, ...)
+		if p and p ~= "" then
+			parts[#parts + 1] = p
+		end
+	end
+	return " " .. fit(table.concat(parts, " · "), float_width() - 2) .. " "
+end
+
+--- Output float title: turn label plus the session title fx generated.
+---@param turn fx.Turn
+---@return string
+local function output_title(turn)
+	local session = require("fx.session")
+	local title = turn.session_id == (session.state and session.state.session_id) and session.current_title() or nil
+	return float_title(turn.ctx and turn.ctx.label or nil, title and title:gsub("%s+", " ") or nil)
+end
+
+--- Redraw the open output float's title after a session_info_update.
+function M.title_changed()
+	local t = M.turn
+	if t and t.win and api.nvim_win_is_valid(t.win) then
+		api.nvim_win_set_config(t.win, { title = output_title(t), title_pos = "left" })
+	end
+end
+
 --- Pick the side for a float window
 ---@param grid_row integer
 ---@param grid_col integer
@@ -120,7 +170,11 @@ function M.input(ctx, cb)
 			height = 2,
 			style = "minimal",
 			border = config.border,
-			title = (" fx · %s · %s "):format(ctx.label, (require("fx.session").current_model():gsub("^.*/", ""))),
+			title = float_title(
+				ctx.label,
+				(require("fx.session").current_model():gsub("^.*/", "")),
+				require("fx.session").current_effort()
+			),
 			title_pos = "left",
 		})
 	)
@@ -165,7 +219,7 @@ function M.input(ctx, cb)
 	vim.keymap.set("n", "<S-CR>", "o", { buffer = buf, remap = false })
 	vim.keymap.set("n", "<Esc>", close, { buffer = buf })
 	vim.keymap.set("n", "q", close, { buffer = buf })
-    vim.keymap.set({ "n", "i" }, "<C-l>", reload, { buffer = buf })
+	vim.keymap.set({ "n", "i" }, "<C-l>", reload, { buffer = buf })
 	vim.cmd.startinsert()
 end
 
@@ -186,6 +240,32 @@ function M.pick_model()
 		}, function(choice)
 			if choice then
 				session.set_model(st, choice)
+			end
+		end)
+	end)
+end
+
+--- Pick the reasoning effort for the running session's model.
+function M.pick_effort()
+	local session = require("fx.session")
+	if session.running then
+		return vim.notify("fx: turn in progress - :Fx stop first", vim.log.levels.WARN)
+	end
+	session.ensure(function(st)
+		if not st then
+			return
+		end
+		if not st.efforts then
+			return vim.notify(("fx: %s has no reasoning effort levels"):format(st.model or "?"), vim.log.levels.INFO)
+		end
+		vim.ui.select(st.efforts, {
+			prompt = "fx effort: ",
+			format_item = function(id)
+				return (id == st.effort and "● " or "  ") .. id
+			end,
+		}, function(choice)
+			if choice then
+				session.set_effort(st, choice)
 			end
 		end)
 	end)
@@ -289,8 +369,14 @@ function M.begin_turn(ctx, session_id)
 		request = ctx.request,
 		at = os.time(),
 	})
-	local model = require("fx.session").current_model():gsub("^.*/", "")
-	heading(turn, ctx.request, ("`%s` · %s · %s"):format(ctx.label, model, os.date("%H:%M", turn.at)))
+	local session = require("fx.session")
+	local model = session.current_model():gsub("^.*/", "")
+	local effort = session.current_effort()
+	heading(
+		turn,
+		ctx.request,
+		("`%s` · %s%s · %s"):format(ctx.label, model, effort and (" · " .. effort) or "", os.date("%H:%M", turn.at))
+	)
 	push_turn(turn)
 	if api.nvim_buf_is_valid(ctx.buf) then
 		turn.spinner_mark = api.nvim_buf_set_extmark(ctx.buf, ns, math.max(ctx.row - 1, 0), 0, {
@@ -351,8 +437,12 @@ end
 ---@param turn fx.Turn
 ---@param u table session/update payload
 function M.replay_chunk(turn, u)
+	if not api.nvim_buf_is_valid(turn.buf) then
+		return
+	end
+	local kind = u.sessionUpdate
 	local text = u.content and u.content.text
-	if not text or not api.nvim_buf_is_valid(turn.buf) then
+	if kind ~= "tool_call" and kind ~= "tool_call_update" and not text then
 		return
 	end
 	if not turn.replayed then
@@ -360,7 +450,11 @@ function M.replay_chunk(turn, u)
 		turn.replayed = true
 		push_turn(turn)
 	end
-	if u.sessionUpdate == "user_message_chunk" then
+	if kind == "tool_call" then
+		M.tool_line(u, turn)
+	elseif kind == "tool_call_update" then
+		M.tool_status(u.toolCallId, u.status, u, turn)
+	elseif kind == "user_message_chunk" then
 		local request, summary = text:match("^(.-)\n\ncontext:\n(.*)$")
 		local loc = summary and summary:match("^[^\n]*")
 		heading(turn, request or text, loc and ("`%s`"):format(loc) or nil)
@@ -451,7 +545,7 @@ function M.show_last_turn(turn)
 			height = height,
 			style = "minimal",
 			border = config.border,
-			title = (" fx · %s "):format(ctx and ctx.label or ""),
+			title = output_title(turn),
 			title_pos = "left",
 		})
 	)
@@ -524,25 +618,6 @@ local function age(sec)
 		return ("%dd ago"):format(math.floor(d / 86400))
 	end
 	return os.date("%b %d", sec) --[[@as string]]
-end
-
---- Clip s to n display columns
----@param s string
----@param n integer
----@return string
-local function fit(s, n)
-	if n < 1 then
-		return ""
-	end
-	if vim.fn.strdisplaywidth(s) <= n then
-		return s
-	end
-	local cut = vim.fn.strcharpart(s, 0, n - 1)
-	-- charpart counts characters, so wide ones can still overrun the budget
-	while vim.fn.strdisplaywidth(cut) > n - 1 do
-		cut = vim.fn.strcharpart(cut, 0, vim.fn.strchars(cut) - 1)
-	end
-	return cut .. "…"
 end
 
 --- session/list entries as {id, at, title, unused} rows, newest first.
@@ -810,8 +885,9 @@ local function tool_item(status, info)
 end
 
 ---@param u table tool_call payload {toolCallId, name, title, kind, status, rawInput?}
-function M.tool_line(u)
-	local t = M.turn
+---@param t fx.Turn? defaults to the turn in flight; session/load passes its replay turn
+function M.tool_line(u, t)
+	t = t or M.turn
 	if not t or not api.nvim_buf_is_valid(t.buf) then
 		return
 	end
@@ -836,8 +912,9 @@ end
 ---@param id string toolCallId from the session update
 ---@param status string "pending" | "in_progress" | "completed" | "failed"
 ---@param u table? the tool_call_update payload, mined for a path or command
-function M.tool_status(id, status, u)
-	local t = M.turn
+---@param t fx.Turn? defaults to the turn in flight; session/load passes its replay turn
+function M.tool_status(id, status, u, t)
+	t = t or M.turn
 	if not t or not api.nvim_buf_is_valid(t.buf) then
 		return
 	end

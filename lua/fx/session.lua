@@ -7,6 +7,8 @@ local config = require("fx.config")
 ---@field cwd string
 ---@field model string?
 ---@field models string[]?
+---@field effort string? current reasoning effort; nil when the model has none
+---@field efforts string[]? effort values the model accepts, "auto" first
 
 ---@class fx.Session
 ---@field state fx.SessionState?
@@ -20,6 +22,11 @@ local switching = false
 
 ---@type table<string, {c: fx.Client, turn: fx.Turn}> sessionId -> in-flight session/load replay
 local replay = {}
+
+--- sessionId -> title from session_info_update. fx sends the update before the
+--- session/new, load, and resume responses, so it cannot land on M.state yet.
+---@type table<string, string>
+local titles = {}
 
 --- Drop the session and any pending replay when the process behind them dies.
 ---@param c fx.Client
@@ -62,12 +69,23 @@ local function handlers()
 			if not params then
 				return
 			end
+			local u = params.update or {}
+			if u.sessionUpdate == "session_info_update" then
+				-- also carries recovery-only updates without a title
+				if type(u.title) == "string" and u.title ~= "Untitled session" then
+					titles[params.sessionId] = u.title
+					if M.state and params.sessionId == M.state.session_id then
+						require("fx.ui").title_changed()
+					end
+				end
+				return
+			end
 			local into = replay[params.sessionId]
 			if into then
-				return require("fx.ui").replay_chunk(into.turn, params.update or {})
+				return require("fx.ui").replay_chunk(into.turn, u)
 			end
 			if M.state and params.sessionId == M.state.session_id then
-				M._on_update(params.update or {})
+				M._on_update(u)
 			end
 		end,
 		["session/request_permission"] = function(params, respond)
@@ -125,16 +143,19 @@ function M._on_permission(params, respond)
 	end)
 end
 
---- Fetch available models in fx
+--- Read model and reasoning effort from the configOptions
 ---@param st fx.SessionState
 ---@param res table?
-local function fetch_model(st, res)
+local function fetch_options(st, res)
+	st.effort, st.efforts = nil, nil
 	for _, opt in ipairs(res and res.configOptions or {}) do
+		local values = vim.tbl_map(function(o)
+			return o.value
+		end, opt.options or {})
 		if opt.id == "model" then
-			st.model = opt.currentValue
-			st.models = vim.tbl_map(function(o)
-				return o.value
-			end, opt.options or {})
+			st.model, st.models = opt.currentValue, values
+		elseif opt.id == "effort" then
+			st.effort, st.efforts = opt.currentValue, values
 		end
 	end
 end
@@ -144,9 +165,23 @@ function M.current_model()
 	return M.state and M.state.model or config.default_model or "?"
 end
 
+--- Reasoning effort of the running session, nil for "auto" or when the model has none.
+---@return string?
+function M.current_effort()
+	local e = M.state and M.state.effort
+	return e ~= "auto" and e or nil
+end
+
+--- Title fx generated for the running session, nil until its first prompt finished.
+---@return string?
+function M.current_title()
+	return M.state and titles[M.state.session_id] or nil
+end
+
 ---@param st fx.SessionState
 ---@param id string
-function M.set_model(st, id)
+---@param cb fun()? runs after the model is applied
+function M.set_model(st, id, cb)
 	st.c:request(
 		"session/set_config_option",
 		{ sessionId = st.session_id, configId = "model", value = id },
@@ -154,9 +189,29 @@ function M.set_model(st, id)
 			if err then
 				return vim.notify(("fx: model %s rejected: %s"):format(id, err.message or "?"), vim.log.levels.WARN)
 			end
-			fetch_model(st, res)
+			fetch_options(st, res)
 			config.default_model = st.model -- carry the choice into future sessions
 			vim.notify("fx: model → " .. st.model)
+			if cb then
+				cb()
+			end
+		end
+	)
+end
+
+---@param st fx.SessionState
+---@param id string one of st.efforts
+function M.set_effort(st, id)
+	st.c:request(
+		"session/set_config_option",
+		{ sessionId = st.session_id, configId = "effort", value = id },
+		function(err, res)
+			if err then
+				return vim.notify(("fx: effort %s rejected: %s"):format(id, err.message or "?"), vim.log.levels.WARN)
+			end
+			fetch_options(st, res)
+			config.default_effort = st.effort
+			vim.notify("fx: effort → " .. (st.effort or "?"))
 		end
 	)
 end
@@ -175,11 +230,31 @@ local function apply_mode(st)
 	end
 end
 
+--- Apply config.default_effort when the active model offers it.
+---@param st fx.SessionState
+local function apply_effort(st)
+	local want = config.default_effort
+	if not want or not st.efforts or want == st.effort then
+		return
+	end
+	if not vim.tbl_contains(st.efforts, want) then
+		return vim.notify(
+			("fx: effort %s not available for %s, keeping %s"):format(want, st.model or "?", st.effort or "auto"),
+			vim.log.levels.WARN
+		)
+	end
+	M.set_effort(st, want)
+end
+
 ---@param st fx.SessionState
 local function apply_session_options(st)
 	apply_mode(st)
 	if config.default_model and config.default_model ~= st.model then
-		M.set_model(st, config.default_model)
+		M.set_model(st, config.default_model, function()
+			apply_effort(st)
+		end)
+	else
+		apply_effort(st)
 	end
 end
 
@@ -242,7 +317,7 @@ local function start(cwd, cb)
 				return cb(nil)
 			end
 			adopt({ c = c, session_id = res.sessionId, cwd = cwd })
-			fetch_model(M.state, res)
+			fetch_options(M.state, res)
 			apply_session_options(M.state)
 			cb(M.state)
 		end)
@@ -299,7 +374,7 @@ function M.new()
 		end
 		st.session_id = res.sessionId
 		adopt(st)
-		fetch_model(st, res)
+		fetch_options(st, res)
 		apply_session_options(st)
 		vim.notify("fx: new session", vim.log.levels.INFO)
 	end)
@@ -338,7 +413,7 @@ function M.resume(id)
 				return vim.notify(("fx: session/resume failed: %s"):format(err.message or "?"), vim.log.levels.ERROR)
 			end
 			adopt({ c = c, session_id = id, cwd = cwd })
-			fetch_model(M.state, res)
+			fetch_options(M.state, res)
 			apply_mode(M.state)
 			vim.notify("fx: session resumed", vim.log.levels.INFO)
 		end)
@@ -426,7 +501,7 @@ local function load(c, cwd, id, cb)
 			return cb(nil)
 		end
 		local st = { c = c, session_id = id, cwd = cwd }
-		fetch_model(st, res)
+		fetch_options(st, res)
 		apply_mode(st)
 		cb(st)
 	end)
