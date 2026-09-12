@@ -110,6 +110,8 @@ int main() {
 | Where | Key | Action |
 | --- | --- | --- |
 | prompt overlay | `<CR>` | submit |
+| prompt overlay | `<C-CR>` / `<S-CR>` | newline |
+| prompt overlay | `<C-l>` | restore previous input |
 | prompt overlay | `q` / `<Esc>` | cancel |
 | transcript hover | `q` / `<Esc>` | close |
 | transcript hover | `<leader>s` / `<leader>t` | export (make a copy) transcript to a new split/window |

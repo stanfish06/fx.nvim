@@ -84,6 +84,9 @@ local function cursor_float_cfg(width, height)
 	return cfg
 end
 
+--- Save input text before closing, reload next time if needed
+local last_input = nil
+
 --- Close a float once the cursor leaves it
 ---@param win integer
 ---@param close fun()
@@ -125,6 +128,14 @@ function M.input(ctx, cb)
 	vim.wo[win].winhighlight = FLOAT_WINHL
 	local function close()
 		if api.nvim_win_is_valid(win) then
+			local lines = api.nvim_buf_get_lines(buf, 0, -1, false)
+			local kept = {}
+			for _, line in ipairs(lines) do
+				if vim.trim(line) ~= "" then
+					kept[#kept + 1] = line
+				end
+			end
+			last_input = kept
 			api.nvim_win_close(win, true)
 		end
 	end
@@ -136,13 +147,25 @@ function M.input(ctx, cb)
 			cb(text)
 		end
 	end
+	-- append what's stored to the end
+	local function reload()
+		if last_input then
+			local row, _ = unpack(vim.api.nvim_win_get_cursor(win))
+			api.nvim_buf_set_lines(buf, row, -1, true, last_input)
+		end
+	end
 	vim.keymap.set("i", "<CR>", function()
 		vim.cmd.stopinsert()
 		submit()
 	end, { buffer = buf })
 	vim.keymap.set("n", "<CR>", submit, { buffer = buf })
+	vim.keymap.set("i", "<C-CR>", "<CR>", { buffer = buf })
+	vim.keymap.set("i", "<S-CR>", "<CR>", { buffer = buf })
+	vim.keymap.set("n", "<C-CR>", "o", { buffer = buf, remap = false })
+	vim.keymap.set("n", "<S-CR>", "o", { buffer = buf, remap = false })
 	vim.keymap.set("n", "<Esc>", close, { buffer = buf })
 	vim.keymap.set("n", "q", close, { buffer = buf })
+    vim.keymap.set({ "n", "i" }, "<C-l>", reload, { buffer = buf })
 	vim.cmd.startinsert()
 end
 
