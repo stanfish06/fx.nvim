@@ -28,6 +28,47 @@ local replay = {}
 ---@type table<string, string>
 local titles = {}
 
+--- context usage
+---@type table<string, fx.Usage>
+local usage = {}
+
+---@class fx.Usage
+---@field used integer context tokens in use
+---@field size integer context window of the active model
+---@field cost {amount: number, currency: string}? running session cost when fx knows it
+
+--- sessionId -> last announced recovery step, to notify once per step
+---@type table<string, string>
+local recovery_seen = {}
+
+---@param id string sessionId
+---@param r table? {state = "active"|"paused"|"recovered", kind, cause, action, requiredAction, attempt, attemptLimit, delaySeconds, message}; nil once cleared
+local function on_recovery(id, r)
+	if not r then
+		recovery_seen[id] = nil
+		return
+	end
+	local key = ("%s/%s"):format(r.state or "?", r.attempt or "")
+	if recovery_seen[id] == key then
+		return
+	end
+	recovery_seen[id] = key
+	local msg = r.message or r.kind or r.state or "?"
+	if r.attempt and r.attemptLimit then
+		msg = ("%s (attempt %d/%d)"):format(msg, r.attempt, r.attemptLimit)
+	end
+	if r.state == "paused" then
+		-- fx stopped retrying; requiredAction says what unblocks it
+		local action = r.requiredAction and (" · " .. r.requiredAction:gsub("_", " ")) or ""
+		vim.notify(("fx: paused - %s%s"):format(msg, action), vim.log.levels.WARN)
+	elseif r.state == "recovered" then
+		vim.notify("fx: recovered - " .. msg, vim.log.levels.INFO)
+	else
+		local wait = r.delaySeconds and (" · retry in %ds"):format(r.delaySeconds) or ""
+		vim.notify(("fx: retrying - %s%s"):format(msg, wait), vim.log.levels.INFO)
+	end
+end
+
 --- Drop the session and any pending replay when the process behind them dies.
 ---@param c fx.Client
 local function process_exit(c)
@@ -71,12 +112,21 @@ local function handlers()
 			end
 			local u = params.update or {}
 			if u.sessionUpdate == "session_info_update" then
-				-- also carries recovery-only updates without a title
 				if type(u.title) == "string" and u.title ~= "Untitled session" then
 					titles[params.sessionId] = u.title
 					if M.state and params.sessionId == M.state.session_id then
 						require("fx.ui").title_changed()
 					end
+				end
+				local meta = u._meta and u._meta.fx
+				if meta then
+					on_recovery(params.sessionId, meta.modelResponseRecovery)
+				end
+				return
+			end
+			if u.sessionUpdate == "usage_update" then
+				if type(u.used) == "number" and type(u.size) == "number" then
+					usage[params.sessionId] = { used = u.used, size = u.size, cost = u.cost }
 				end
 				return
 			end
@@ -176,6 +226,12 @@ end
 ---@return string?
 function M.current_title()
 	return M.state and titles[M.state.session_id] or nil
+end
+
+--- Context usage of the running session, nil until its first turn completes.
+---@return fx.Usage?
+function M.current_usage()
+	return M.state and usage[M.state.session_id] or nil
 end
 
 ---@param st fx.SessionState

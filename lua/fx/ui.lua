@@ -75,6 +75,24 @@ local function fit(s, n)
 	return cut .. "…"
 end
 
+---@param n integer
+---@return string
+local function fmt_tokens(n)
+	if n >= 1e6 then
+		return ("%.1fM"):format(n / 1e6)
+	elseif n >= 1e3 then
+		return ("%dk"):format(math.floor(n / 1e3 + 0.5))
+	end
+	return tostring(n)
+end
+
+--- "41k/200k" for the running session's context usage, nil before its first turn
+---@return string?
+local function usage_label()
+	local u = require("fx.session").current_usage()
+	return u and (fmt_tokens(u.used) .. "/" .. fmt_tokens(u.size)) or nil
+end
+
 --- " fx · a · b " from the non-nil parts, clipped to the float width.
 ---@param ... string?
 ---@return string
@@ -173,7 +191,8 @@ function M.input(ctx, cb)
 			title = float_title(
 				ctx.label,
 				(require("fx.session").current_model():gsub("^.*/", "")),
-				require("fx.session").current_effort()
+				require("fx.session").current_effort(),
+				usage_label()
 			),
 			title_pos = "left",
 		})
@@ -945,9 +964,12 @@ function M.end_turn(err_msg, stop_reason)
 		pcall(api.nvim_buf_del_extmark, t.ctx.buf, ns, t.spinner_mark)
 	end
 	if api.nvim_buf_is_valid(t.buf) then
-		boundary(t) -- also closes a fence a cut-off turn left open
+		boundary(t)
+		local usage = require("fx.session").current_usage()
+		local ctx_used = usage and (" · " .. fmt_tokens(usage.used) .. "/" .. fmt_tokens(usage.size)) or ""
+		local cost = usage and usage.cost and usage.cost.amount and (" · $%.2f"):format(usage.cost.amount) or ""
 		local status = err_msg and ("✗ " .. err_msg)
-			or ("*%s · %ds*"):format(stop_reason or "done", os.time() - t.at)
+			or ("*%s · %ds%s%s*"):format(stop_reason or "done", os.time() - t.at, ctx_used, cost)
 		api.nvim_buf_set_lines(t.buf, -2, -1, false, { "---", status })
 		M._refresh()
 	end
