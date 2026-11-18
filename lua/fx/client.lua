@@ -34,6 +34,7 @@ end
 ---@field pending table<integer, {method: string, cb: fun(err: table?, result: table?)?}>
 ---@field handlers table<string, function>
 ---@field dead boolean
+---@field caps table? agentCapabilities from the initialize response
 local Client = {}
 Client.__index = Client
 

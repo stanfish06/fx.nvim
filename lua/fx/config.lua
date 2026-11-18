@@ -1,9 +1,12 @@
 local M = {
 	fx_cmd = { "fx", "acp" },
-	mode = "code",
+	mode = "auto", -- ACP mode set on every session: auto|ask|full-access; nil keeps fx's saved mode
 	default_model = "deepseek/deepseek-v4.1-flash",
 	default_effort = nil,
 	permission = "yolo",
+	-- Appended to fx's own instructions on new sessions;
+	-- nil uses the built-in note on how fx.nvim talks to the agent, false sends none.
+	system_prompt = nil,
 	context_limits = { skill_catalog_bytes = 0 },
 	update_file_before_prompt = true, -- force update current file before sending to fx
 	send_prompt_despite_update_failed = true,

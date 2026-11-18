@@ -336,8 +336,9 @@ end
 ---@param t fx.Turn
 ---@param request string
 ---@param meta string?
-local function heading(t, request, meta)
-	local lines = { "## ❯ " .. request:gsub("\n", " ") }
+---@param prefix string? heading marker, "## ❯ " by default
+local function heading(t, request, meta, prefix)
+	local lines = { (prefix or "## ❯ ") .. request:gsub("\n", " ") }
 	if meta then
 		lines[#lines + 1] = meta
 	end
@@ -411,6 +412,17 @@ function M.begin_turn(ctx, session_id)
 			end)
 		)
 	end
+end
+
+--- Write a follow-up sent while the turn runs into its transcript.
+---@param ctx fx.Context
+function M.steer(ctx)
+	local t = M.turn
+	if not t or not api.nvim_buf_is_valid(t.buf) then
+		return
+	end
+	heading(t, ctx.request, ("`%s` · steer · %s"):format(ctx.label, os.date("%H:%M")), "### ↪ ")
+	M._refresh()
 end
 
 --- Advance the spinner one frame.
